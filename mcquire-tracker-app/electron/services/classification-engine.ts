@@ -398,7 +398,6 @@ export function learnFromClassification(
         requeue.run(reason, row.id)
       }
     })
-    })
     run()
     requeuedCount = contradictions.length
     console.log(`[Learning] Requeued ${requeuedCount} contradicting auto-classified txns for "${tx.merchant_name}"`)
