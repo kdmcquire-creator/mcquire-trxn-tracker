@@ -372,27 +372,32 @@ export function learnFromClassification(
   }
 
   // ── Step 2: Flag contradicting auto-classified transactions ────────────
+  // Only targets auto_classified — never touches manually_classified.
   // If we just said "merchant X is Peak 10" but other transactions from merchant X
   // were auto-classified as something else, those are now ambiguous.
   const contradictions = db.prepare(`
-    SELECT id FROM transactions
+    SELECT id, bucket FROM transactions
     WHERE merchant_name = ?
       AND bucket != ?
       AND bucket IS NOT NULL
       AND review_status = 'auto_classified'
       AND id != ?
-  `).all(tx.merchant_name, tx.bucket, tx.id) as Array<{ id: string }>
+  `).all(tx.merchant_name, tx.bucket, tx.id) as Array<{ id: string; bucket: string }>
 
   if (contradictions.length > 0) {
     const requeue = db.prepare(`
       UPDATE transactions
       SET review_status = 'pending_review',
-          flag_reason = 'Ambiguous: same merchant classified differently — needs review',
+          flag_reason = ?,
           updated_at = datetime('now')
       WHERE id = ?
     `)
     const run = db.transaction(() => {
-      for (const row of contradictions) requeue.run(row.id)
+      for (const row of contradictions) {
+        const reason = `Was auto-classified as ${row.bucket}, but you classified another "${tx.merchant_name}" as ${tx.bucket}. Which is correct?`
+        requeue.run(reason, row.id)
+      }
+    })
     })
     run()
     requeuedCount = contradictions.length
