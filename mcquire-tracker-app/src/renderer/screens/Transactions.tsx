@@ -106,9 +106,11 @@ export default function Transactions() {
 
   const handleWizardSplit = useCallback(async (txId: string, fragments: any[]) => {
     await window.api.transactions.split(txId, fragments)
-    // Reload to get the new split children
-    load()
-  }, [load])
+    // Reload in background to pick up split children — scroll position preserved
+    // because React reconciles the table without unmounting
+    const raw = await window.api.transactions.getAll().catch(() => [])
+    setRows(unwrap<any[]>(raw, []))
+  }, [])
 
   const exportCSV = () => {
     const headers = ["Date", "Account", "Merchant", "Bucket", "Category", "Amount", "Notes", "Status"]
@@ -264,7 +266,7 @@ export default function Transactions() {
             startTxId={editTxId}
             onClassify={handleWizardClassify}
             onSplit={handleWizardSplit}
-            onClose={() => { setEditTxId(null); load() }}
+            onClose={() => setEditTxId(null)}
           />
         )
       })()}
