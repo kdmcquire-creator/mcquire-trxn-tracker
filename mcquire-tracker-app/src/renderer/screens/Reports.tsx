@@ -1,9 +1,22 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, useCallback } from "react"
 
 function unwrap<T>(res: any, fallback: T): T {
   if (res === null || res === undefined) return fallback
   if (typeof res === "object" && "data" in res) return (res.data as T) ?? fallback
   return (res as T) ?? fallback
+}
+
+/* ── Parse note suggestions into individual name chips ─────────────────────── */
+function parseNoteSuggestions(rawNotes: Array<{ note: string; use_count: number }>): string[] {
+  const nameSet = new Set<string>()
+  for (const { note } of rawNotes) {
+    const parts = note.split(/[,;]|\s+and\s+|\s+&\s+/i)
+    for (const p of parts) {
+      const trimmed = p.trim()
+      if (trimmed.length >= 2 && trimmed.length <= 80) nameSet.add(trimmed)
+    }
+  }
+  return Array.from(nameSet)
 }
 
 const REPORT_TYPES = [
@@ -62,6 +75,20 @@ export default function Reports() {
   const [loadingBlockers, setLoadingBlockers] = useState(false)
   const [noteDraft, setNoteDraft] = useState<Record<string, string>>({})
   const [savingNote, setSavingNote] = useState<Record<string, boolean>>({})
+  // Per-transaction note suggestions (name chips)
+  const [noteSuggestions, setNoteSuggestions] = useState<Record<string, string[]>>({})
+
+  const toggleNoteChip = useCallback((txId: string, chip: string) => {
+    setNoteDraft(prev => {
+      const current = prev[txId] ?? ""
+      const parts = current.split(",").map(s => s.trim()).filter(Boolean)
+      if (parts.includes(chip)) {
+        return { ...prev, [txId]: parts.filter(p => p !== chip).join(", ") }
+      } else {
+        return { ...prev, [txId]: [...parts, chip].join(", ") }
+      }
+    })
+  }, [])
 
   const checkReadiness = async () => {
     setCheckingReadiness(true)
@@ -107,6 +134,19 @@ export default function Reports() {
       const drafts: Record<string, string> = {}
       meals.forEach(tx => { drafts[tx.id] = tx.description_notes ?? "" })
       setNoteDraft(drafts)
+      // Load note suggestions for each meal transaction
+      const suggestions: Record<string, string[]> = {}
+      for (const tx of meals) {
+        try {
+          const res = await window.api?.transactions?.getRecentNotes?.({
+            category: tx.p10_category ?? undefined,
+            merchant: (tx.merchant_name ?? tx.description_raw) || undefined,
+          })
+          const data = res?.data ?? res ?? []
+          if (Array.isArray(data)) suggestions[tx.id] = parseNoteSuggestions(data)
+        } catch {}
+      }
+      setNoteSuggestions(suggestions)
     } catch {
       // leave lists empty
     } finally {
@@ -423,7 +463,7 @@ export default function Reports() {
                                   <td className="px-3 py-2 whitespace-nowrap text-slate-700">{fmtDate(tx.transaction_date)}</td>
                                   <td className="px-3 py-2 whitespace-nowrap text-slate-600 text-xs">{tx.p10_category}</td>
                                   <td className="px-3 py-2 text-slate-800 font-medium max-w-[180px] truncate">{tx.merchant_name || tx.description_raw}</td>
-                                  <td className="px-3 py-2 min-w-[220px]">
+                                  <td className="px-3 py-2 min-w-[280px]">
                                     <input
                                       type="text"
                                       value={noteDraft[tx.id] ?? ""}
@@ -435,6 +475,25 @@ export default function Reports() {
                                           : "border-slate-300 focus:border-blue-400"
                                       } focus:outline-none`}
                                     />
+                                    {(noteSuggestions[tx.id] ?? []).length > 0 && (
+                                      <div className="flex flex-wrap gap-1 mt-1">
+                                        {(noteSuggestions[tx.id] ?? []).slice(0, 8).map((chip, ci) => {
+                                          const isActive = (noteDraft[tx.id] ?? "").split(",").map(s => s.trim()).includes(chip)
+                                          return (
+                                            <button key={ci}
+                                              onClick={() => toggleNoteChip(tx.id, chip)}
+                                              className={`px-2 py-0.5 rounded-full text-xs font-medium transition-all ${
+                                                isActive
+                                                  ? "bg-blue-600 text-white"
+                                                  : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                                              }`}
+                                            >
+                                              {chip}
+                                            </button>
+                                          )
+                                        })}
+                                      </div>
+                                    )}
                                   </td>
                                   <td className="px-3 py-2 text-right whitespace-nowrap font-medium text-slate-800">{fmt(tx.amount)}</td>
                                   <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">
