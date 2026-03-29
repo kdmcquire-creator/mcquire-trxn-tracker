@@ -277,6 +277,131 @@ function upsertVendor(
   }
 }
 
+/**
+ * Learning engine: called after every manual classification.
+ *
+ * 1. If the same merchant has been manually classified to the same bucket 2+ times
+ *    AND no active rule covers it, auto-generate a "contains" rule.
+ *
+ * 2. If this manual classification contradicts how other transactions from the same
+ *    merchant were auto-classified, move those to pending_review (ambiguous).
+ *
+ * Returns a summary of actions taken.
+ */
+export function learnFromClassification(
+  db: CompatDb,
+  txId: string
+): { ruleCreated: boolean; ruleName?: string; requeuedCount: number } {
+  const { v4: uuidv4 } = require('uuid')
+
+  // Load the transaction that was just classified
+  const tx = db.prepare(
+    `SELECT t.*, a.account_mask FROM transactions t
+     JOIN accounts a ON a.id = t.account_id
+     WHERE t.id = ?`
+  ).get(txId) as {
+    id: string; merchant_name: string | null; description_raw: string;
+    bucket: string; p10_category: string | null; llc_category: string | null;
+    account_mask: string; review_status: string
+  } | undefined
+
+  if (!tx || tx.review_status !== 'manually_classified' || !tx.merchant_name) {
+    return { ruleCreated: false, requeuedCount: 0 }
+  }
+
+  const merchantNorm = tx.merchant_name.toLowerCase().trim()
+  let ruleCreated = false
+  let ruleName: string | undefined
+  let requeuedCount = 0
+
+  // ── Step 1: Check if we should auto-create a rule ──────────────────────
+  // Count how many times this merchant has been manually classified to the same bucket
+  const sameClassCount = db.prepare(`
+    SELECT COUNT(*) as n FROM transactions
+    WHERE merchant_name = ? AND bucket = ? AND review_status = 'manually_classified'
+  `).get(tx.merchant_name, tx.bucket) as { n: number }
+
+  if (sameClassCount.n >= 2) {
+    // Check if an active rule already covers this merchant
+    const existingRule = db.prepare(`
+      SELECT id FROM rules
+      WHERE is_active = 1
+        AND (match_value = ? OR (match_type = 'contains' AND ? LIKE '%' || match_value || '%'))
+        AND bucket = ?
+    `).get(merchantNorm, merchantNorm, tx.bucket) as { id: string } | undefined
+
+    if (!existingRule) {
+      // Determine section and priority based on bucket
+      let section: string, priority: number
+      switch (tx.bucket) {
+        case 'Peak 10':                    section = 'p10_always';        priority = 395; break
+        case 'Moonsmoke LLC':              section = 'llc_always';        priority = 295; break
+        case 'Watersound Investments LLC': section = 'personal_override'; priority = 595; break
+        case 'Personal':                   section = 'personal_override'; priority = 595; break
+        default:                           section = 'personal_override'; priority = 595
+      }
+
+      // Create a short match value by stripping common prefixes
+      const matchValue = merchantNorm
+        .replace(/^tst\*\s*/i, '')
+        .replace(/^sq\s+\*\s*/i, '')
+        .replace(/^py\s+\*/i, '')
+        .replace(/\s+#\d+$/, '')
+        .replace(/\s+\d{4,}$/, '')
+        .trim()
+
+      if (matchValue.length >= 3) {
+        ruleName = `[Learned] ${tx.merchant_name} → ${tx.bucket}`
+        const ruleId = uuidv4()
+        db.prepare(`
+          INSERT OR IGNORE INTO rules
+            (id, rule_name, section, match_type, match_value, account_mask_filter,
+             bucket, p10_category, llc_category, description_notes, action,
+             priority_order, is_active, notes, created_at, updated_at)
+          VALUES (?, ?, ?, 'contains', ?, NULL, ?, ?, ?, NULL, 'classify', ?, 1,
+                  'Auto-generated from 2+ manual classifications', datetime('now'), datetime('now'))
+        `).run(
+          ruleId, ruleName, section, matchValue,
+          tx.bucket, tx.p10_category ?? null, tx.llc_category ?? null,
+          priority
+        )
+        ruleCreated = true
+        console.log(`[Learning] Created rule: "${ruleName}" (match: contains "${matchValue}")`)
+      }
+    }
+  }
+
+  // ── Step 2: Flag contradicting auto-classified transactions ────────────
+  // If we just said "merchant X is Peak 10" but other transactions from merchant X
+  // were auto-classified as something else, those are now ambiguous.
+  const contradictions = db.prepare(`
+    SELECT id FROM transactions
+    WHERE merchant_name = ?
+      AND bucket != ?
+      AND bucket IS NOT NULL
+      AND review_status = 'auto_classified'
+      AND id != ?
+  `).all(tx.merchant_name, tx.bucket, tx.id) as Array<{ id: string }>
+
+  if (contradictions.length > 0) {
+    const requeue = db.prepare(`
+      UPDATE transactions
+      SET review_status = 'pending_review',
+          flag_reason = 'Ambiguous: same merchant classified differently — needs review',
+          updated_at = datetime('now')
+      WHERE id = ?
+    `)
+    const run = db.transaction(() => {
+      for (const row of contradictions) requeue.run(row.id)
+    })
+    run()
+    requeuedCount = contradictions.length
+    console.log(`[Learning] Requeued ${requeuedCount} contradicting auto-classified txns for "${tx.merchant_name}"`)
+  }
+
+  return { ruleCreated, ruleName, requeuedCount }
+}
+
 export function reclassifyPendingAfterRuleChange(db: CompatDb): { resolved: number } {
   const pending = db.prepare(
     "SELECT t.*, a.account_mask FROM transactions t JOIN accounts a ON a.id = t.account_id WHERE t.review_status = 'pending_review'"

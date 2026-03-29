@@ -4,7 +4,7 @@
 import { ipcMain, dialog, shell, BrowserWindow } from 'electron'
 import * as path from 'path'
 import type { CompatDb } from '../../electron/services/database'
-import { reclassifyPendingAfterRuleChange, invalidateTripDateCache } from '../../electron/services/classification-engine'
+import { reclassifyPendingAfterRuleChange, invalidateTripDateCache, learnFromClassification } from '../../electron/services/classification-engine'
 import { saveClaudeApiKey, hasClaudeApiKey, deleteClaudeApiKey, suggestClassification, suggestBatch } from '../../electron/services/claude-classifier'
 
 interface AppState {
@@ -125,7 +125,18 @@ export function registerAppIpcHandlers(state: AppState): void {
     const set = fields.map((f) => `${f} = ?`).join(', ')
     db.prepare(`UPDATE transactions SET ${set}, updated_at = datetime('now') WHERE id = ?`)
       .run(...fields.map((f) => update[f]), id)
-    return { success: true }
+
+    // Learning engine: auto-generate rules from patterns, flag contradictions
+    let learned: { ruleCreated: boolean; ruleName?: string; requeuedCount: number } | undefined
+    if (update.review_status === 'manually_classified') {
+      try {
+        learned = learnFromClassification(db, id)
+      } catch (err) {
+        console.error('[Learning] Error:', err)
+      }
+    }
+
+    return { success: true, learned }
   })
 
   ipcMain.handle('transactions:run-rules-all', () => {

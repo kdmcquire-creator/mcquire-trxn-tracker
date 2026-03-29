@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react"
-import { P10_CATEGORIES, LLC_CATEGORIES } from "../../shared/types"
+import AssignmentWizard from "./AssignmentWizard"
 
 function unwrap<T>(res: any, fallback: T): T {
   if (res === null || res === undefined) return fallback
@@ -7,7 +7,7 @@ function unwrap<T>(res: any, fallback: T): T {
   return (res as T) ?? fallback
 }
 
-const BUCKETS = ["Peak 10", "Moonsmoke LLC", "Personal", "Exclude"]
+const BUCKETS = ["Peak 10", "Moonsmoke LLC", "Watersound Investments LLC", "Personal", "Exclude"]
 const STATUSES = ["auto_classified", "manually_classified", "pending_review", "flagged"]
 
 const bucketColor: Record<string, string> = {
@@ -36,9 +36,7 @@ export default function Transactions() {
   const [rows, setRows] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [editRow, setEditRow] = useState<any | null>(null)
-  const [editState, setEditState] = useState<any>({})
-  const [saving, setSaving] = useState(false)
+  const [editTxId, setEditTxId] = useState<string | null>(null)
 
   // Filters
   const [search, setSearch] = useState("")
@@ -101,36 +99,16 @@ export default function Transactions() {
     else { setSortBy(col); setSortDir("desc") }
   }
 
-  const openEdit = (tx: any) => {
-    setEditRow(tx)
-    setEditState({
-      bucket: tx.bucket ?? "",
-      category: tx.p10_category || tx.llc_category || "",
-      notes: tx.description_notes ?? "",
-      review_status: tx.review_status ?? "",
-    })
-  }
+  const handleWizardClassify = useCallback(async (txId: string, update: any) => {
+    await window.api.transactions.classify(txId, update)
+    setRows(prev => prev.map(r => r.id === txId ? { ...r, ...update } : r))
+  }, [])
 
-  const saveEdit = async () => {
-    if (!editRow) return
-    setSaving(true)
-    try {
-      const update: any = {
-        bucket: editState.bucket,
-        review_status: "manually_classified",
-        description_notes: editState.notes,
-      }
-      if (editState.bucket === "Peak 10") update.p10_category = editState.category
-      if (editState.bucket === "Moonsmoke LLC") update.llc_category = editState.category
-      await window.api.transactions.classify(editRow.id, update)
-      setRows(prev => prev.map(r => r.id === editRow.id ? { ...r, ...update } : r))
-      setEditRow(null)
-    } catch (e: any) {
-      alert("Save error: " + (e?.message ?? "unknown"))
-    } finally {
-      setSaving(false)
-    }
-  }
+  const handleWizardSplit = useCallback(async (txId: string, fragments: any[]) => {
+    await window.api.transactions.split(txId, fragments)
+    // Reload to get the new split children
+    load()
+  }, [load])
 
   const exportCSV = () => {
     const headers = ["Date", "Account", "Merchant", "Bucket", "Category", "Amount", "Notes", "Status"]
@@ -220,7 +198,7 @@ export default function Transactions() {
                 <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400">No transactions match filters</td></tr>
               )}
               {paginated.map(tx => (
-                <tr key={tx.id} className="hover:bg-slate-50 transition-colors">
+                <tr key={tx.id} className="hover:bg-slate-50 transition-colors cursor-pointer" onClick={() => setEditTxId(tx.id)}>
                   <td className="px-4 py-2 whitespace-nowrap text-slate-600">{fmtDate(tx.transaction_date)}</td>
                   <td className="px-4 py-2 text-slate-500 whitespace-nowrap">···{tx.account_mask ?? ""}</td>
                   <td className="px-4 py-2">
@@ -252,7 +230,7 @@ export default function Transactions() {
                   </td>
                   <td className="px-4 py-2">
                     <button
-                      onClick={() => openEdit(tx)}
+                      onClick={(e) => { e.stopPropagation(); setEditTxId(tx.id) }}
                       className="text-blue-600 hover:text-blue-800 text-xs font-medium"
                     >Edit</button>
                   </td>
@@ -276,67 +254,20 @@ export default function Transactions() {
         )}
       </div>
 
-      {/* Edit Drawer / Modal */}
-      {editRow && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-end md:items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-bold text-slate-800">Edit Transaction</h2>
-              <button onClick={() => setEditRow(null)} className="text-slate-400 hover:text-slate-600 text-xl">✕</button>
-            </div>
-            <div className="text-sm text-slate-600 mb-4">
-              <div className="font-medium text-slate-800">{editRow.merchant_name || editRow.description_raw}</div>
-              <div>{fmtDate(editRow.transaction_date)} · {fmt(editRow.amount)}</div>
-            </div>
-
-            <div className="space-y-3">
-              <div>
-                <label className="text-xs font-semibold text-slate-500 uppercase block mb-1">Bucket</label>
-                <select value={editState.bucket} onChange={e => setEditState((s: any) => ({ ...s, bucket: e.target.value, category: "" }))}
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
-                  <option value="">— Select —</option>
-                  {BUCKETS.map(b => <option key={b} value={b}>{b}</option>)}
-                </select>
-              </div>
-
-              {editState.bucket === "Peak 10" && (
-                <div>
-                  <label className="text-xs font-semibold text-slate-500 uppercase block mb-1">P10 Category</label>
-                  <select value={editState.category} onChange={e => setEditState((s: any) => ({ ...s, category: e.target.value }))}
-                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
-                    <option value="">— Select —</option>
-                    {P10_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                </div>
-              )}
-
-              {editState.bucket === "Moonsmoke LLC" && (
-                <div>
-                  <label className="text-xs font-semibold text-slate-500 uppercase block mb-1">LLC Category</label>
-                  <select value={editState.category} onChange={e => setEditState((s: any) => ({ ...s, category: e.target.value }))}
-                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
-                    <option value="">— Select —</option>
-                    {LLC_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                </div>
-              )}
-
-              <div>
-                <label className="text-xs font-semibold text-slate-500 uppercase block mb-1">Description / Notes</label>
-                <input type="text" value={editState.notes} onChange={e => setEditState((s: any) => ({ ...s, notes: e.target.value }))}
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
-              </div>
-            </div>
-
-            <div className="flex gap-3 mt-5">
-              <button onClick={() => setEditRow(null)} className="flex-1 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50">Cancel</button>
-              <button onClick={saveEdit} disabled={saving} className="flex-1 py-2 bg-slate-800 text-white rounded-lg text-sm hover:bg-slate-900 disabled:opacity-50">
-                {saving ? "Saving..." : "Save"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Edit via Assignment Wizard (single-transaction mode) */}
+      {editTxId && (() => {
+        const editTx = rows.find(r => r.id === editTxId)
+        if (!editTx) return null
+        return (
+          <AssignmentWizard
+            transactions={[editTx]}
+            startTxId={editTxId}
+            onClassify={handleWizardClassify}
+            onSplit={handleWizardSplit}
+            onClose={() => { setEditTxId(null); load() }}
+          />
+        )
+      })()}
     </div>
   )
 }

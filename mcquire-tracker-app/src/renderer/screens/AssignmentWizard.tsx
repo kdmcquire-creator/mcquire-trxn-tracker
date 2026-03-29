@@ -127,12 +127,24 @@ interface WizardProps {
   onClassify: (txId: string, update: any) => Promise<void>
   onSplit: (txId: string, fragments: any[]) => Promise<void>
   onClose: () => void
+  /** If set, start the wizard on this specific transaction (single-edit mode) */
+  startTxId?: string
 }
 
 type WizardStep = "entity" | "category" | "notes"
 
-export default function AssignmentWizard({ transactions, onClassify, onSplit, onClose }: WizardProps) {
-  const [txIdx, setTxIdx] = useState(0)
+export default function AssignmentWizard({ transactions, onClassify, onSplit, onClose, startTxId }: WizardProps) {
+  // Snapshot the transaction list at mount time so removals don't shift our index
+  const [queue] = useState(() => [...transactions])
+  const isSingleEdit = !!startTxId
+
+  const [txIdx, setTxIdx] = useState(() => {
+    if (startTxId) {
+      const idx = transactions.findIndex(t => t.id === startTxId)
+      return idx >= 0 ? idx : 0
+    }
+    return 0
+  })
   const [step, setStep] = useState<WizardStep>("entity")
   const [entity, setEntity] = useState("")
   const [category, setCategory] = useState("")
@@ -149,9 +161,9 @@ export default function AssignmentWizard({ transactions, onClassify, onSplit, on
   // Note suggestions
   const [noteSuggestions, setNoteSuggestions] = useState<string[]>([])
 
-  const tx = transactions[txIdx]
-  const totalCount = transactions.length
-  const isLastTx = txIdx >= totalCount - 1
+  const tx = queue[txIdx]
+  const totalCount = queue.length
+  const isLastTx = isSingleEdit || txIdx >= totalCount - 1
 
   // Reset state when moving to a new transaction
   useEffect(() => {
