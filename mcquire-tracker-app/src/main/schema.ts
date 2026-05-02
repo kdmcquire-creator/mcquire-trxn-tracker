@@ -433,6 +433,47 @@ function runMigrations(database: CompatDb): void {
 
     database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('007-csv-rehash-dedup')
   }
+
+  // Migration 008: exclude cross-account duplicates with ±1 day date tolerance
+  // Catches pending-vs-posted duplicates (e.g., card 9007 pending on day N,
+  // card 2419 posted on day N+1, same merchant + same amount)
+  if (!applied('008-fuzzy-date-cross-account-dedup')) {
+    const fuzzyDupes = database.prepare(`
+      SELECT t2.id
+      FROM transactions t1
+      JOIN transactions t2
+        ON t2.merchant_name = t1.merchant_name
+        AND t2.amount = t1.amount
+        AND ABS(julianday(t2.transaction_date) - julianday(t1.transaction_date)) <= 1
+        AND t2.account_id != t1.account_id
+        AND t2.id != t1.id
+      WHERE t1.bucket != 'Exclude'
+        AND t2.bucket != 'Exclude'
+        AND t1.merchant_name IS NOT NULL
+        AND t1.review_status IN ('auto_classified', 'manually_classified')
+        AND t2.review_status IN ('auto_classified', 'pending_review')
+        AND t1.created_at < t2.created_at
+    `).all() as Array<{ id: string }>
+
+    const uniqueIds = [...new Set(fuzzyDupes.map(d => d.id))]
+
+    if (uniqueIds.length > 0) {
+      const excludeDupe = database.prepare(`
+        UPDATE transactions
+        SET bucket = 'Exclude', review_status = 'auto_classified',
+            flag_reason = 'Cross-account duplicate ±1 day (migration 008)',
+            updated_at = datetime('now')
+        WHERE id = ?
+      `)
+      const run = database.transaction(() => {
+        for (const id of uniqueIds) excludeDupe.run(id)
+      })
+      run()
+      console.log(`[Migration 008] Excluded ${uniqueIds.length} cross-account duplicates (±1 day tolerance)`)
+    }
+
+    database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('008-fuzzy-date-cross-account-dedup')
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

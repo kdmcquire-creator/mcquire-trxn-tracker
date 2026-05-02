@@ -430,17 +430,19 @@ export class PlaidService {
     date: string,
     accountId: string
   ): boolean {
+    // Allow ±1 day tolerance to catch pending vs posted date offsets
+    // (e.g., card 9007 shows pending on day N, card 2419 posts on day N+1)
     const matches = this.db
       .prepare(
         `SELECT COUNT(*) as n FROM transactions t
          WHERE t.account_id != ?
            AND t.merchant_name = ?
            AND t.amount = ?
-           AND t.transaction_date = ?
+           AND ABS(julianday(t.transaction_date) - julianday(?)) <= 1
            AND t.bucket != 'Exclude'`
       )
       .get(accountId, merchantNorm, amount, date) as { n: number }
-    return matches.n === 1
+    return matches.n >= 1
   }
 
   private importPlaidTransaction(tx: any, _plaidItemId: string): 'new' | 'duplicate' | 'queued' {
