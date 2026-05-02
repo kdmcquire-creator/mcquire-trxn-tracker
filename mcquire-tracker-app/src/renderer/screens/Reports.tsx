@@ -119,6 +119,24 @@ export default function Reports() {
     }
   }, [editingBlocker, blockerNoteDraft])
 
+  const closeBlockerModal = useCallback(async () => {
+    setShowBlockerModal(false)
+    setEditingBlocker(null)
+    // Always re-check readiness with current date range after resolving blockers
+    setCheckingReadiness(true)
+    try {
+      const raw = await window.api.reports.checkExpenseReportReadiness({ dateFrom, dateTo }).catch(() => null)
+      const result = unwrap<{ ready: boolean; blockers: string[]; warnings: string[] } | null>(raw, null)
+      if (result) {
+        setReadiness({
+          ready: result.ready ?? !result.blockers?.length,
+          blockers: result.blockers ?? [],
+          warnings: result.warnings ?? [],
+        })
+      }
+    } catch {} finally { setCheckingReadiness(false) }
+  }, [dateFrom, dateTo])
+
   const checkReadiness = async () => {
     setCheckingReadiness(true)
     setError(null)
@@ -395,7 +413,7 @@ export default function Reports() {
                   Click a transaction to add attendee names
                 </p>
               </div>
-              <button onClick={() => { setShowBlockerModal(false); checkReadiness() }}
+              <button onClick={closeBlockerModal}
                 className="text-slate-400 hover:text-slate-600 text-xl leading-none">&times;</button>
             </div>
 
@@ -460,7 +478,7 @@ export default function Reports() {
 
             {/* Footer */}
             <div className="px-6 py-3 border-t border-slate-100 flex justify-end shrink-0">
-              <button onClick={() => { setShowBlockerModal(false); checkReadiness() }}
+              <button onClick={closeBlockerModal}
                 className="px-5 py-2 bg-slate-800 text-white text-sm font-medium rounded-lg hover:bg-slate-900">
                 Done
               </button>
