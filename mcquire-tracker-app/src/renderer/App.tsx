@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react"
+import React, { useState, useEffect, useCallback } from "react"
 import Sidebar from "./components/Sidebar"
 import ErrorBoundary from "./components/ErrorBoundary"
 import Dashboard from "./screens/Dashboard"
@@ -11,12 +11,35 @@ import SetupWizard from "./screens/SetupWizard"
 
 export type Screen = "dashboard" | "review" | "transactions" | "reports" | "investments" | "settings"
 
+/* ── Toast notification system ─────────────────────────────────────────────── */
+interface Toast {
+  id: number
+  message: string
+  type: "info" | "success" | "ai"
+}
+
+let _nextToastId = 0
+let _addToast: ((msg: string, type: Toast["type"]) => void) | null = null
+
+export function showToast(message: string, type: Toast["type"] = "info") {
+  _addToast?.(message, type)
+}
+
 export default function App() {
   const [screen, setScreen] = useState<Screen>("dashboard")
   const [isFirstRun, setIsFirstRun] = useState(true)
   const [isReady, setIsReady] = useState(false)
   const [pendingCount, setPendingCount] = useState(0)
   const [lockWarning, setLockWarning] = useState(false)
+  const [toasts, setToasts] = useState<Toast[]>([])
+
+  const addToast = useCallback((message: string, type: Toast["type"]) => {
+    const id = _nextToastId++
+    setToasts(prev => [...prev, { id, message, type }])
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 5000)
+  }, [])
+
+  useEffect(() => { _addToast = addToast; return () => { _addToast = null } }, [addToast])
 
   useEffect(() => {
     // Try event-based init (if main process sends it)
@@ -110,6 +133,26 @@ export default function App() {
       <main className="flex-1 overflow-auto">
         {screens[screen]}
       </main>
+      {/* Toast notifications */}
+      {toasts.length > 0 && (
+        <div className="fixed bottom-4 right-4 z-50 space-y-2 max-w-sm">
+          {toasts.map(t => (
+            <div key={t.id}
+              className={`px-4 py-3 rounded-lg shadow-lg text-sm font-medium animate-slide-in flex items-start gap-2 ${
+                t.type === "ai" ? "bg-violet-600 text-white" :
+                t.type === "success" ? "bg-green-600 text-white" :
+                "bg-slate-800 text-white"
+              }`}>
+              <span className="shrink-0">
+                {t.type === "ai" ? "🧠" : t.type === "success" ? "✓" : "ℹ"}
+              </span>
+              <span>{t.message}</span>
+              <button onClick={() => setToasts(prev => prev.filter(x => x.id !== t.id))}
+                className="ml-auto shrink-0 opacity-60 hover:opacity-100">&times;</button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

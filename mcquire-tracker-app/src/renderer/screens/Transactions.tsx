@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react"
 import AssignmentWizard from "./AssignmentWizard"
+import { showToast } from "../App"
 
 function unwrap<T>(res: any, fallback: T): T {
   if (res === null || res === undefined) return fallback
@@ -100,8 +101,15 @@ export default function Transactions() {
   }
 
   const handleWizardClassify = useCallback(async (txId: string, update: any) => {
-    await window.api.transactions.classify(txId, update)
+    const result = await window.api.transactions.classify(txId, update)
     setRows(prev => prev.map(r => r.id === txId ? { ...r, ...update } : r))
+    const learned = result?.learned
+    if (learned?.ruleCreated) {
+      showToast(`Rule created: "${learned.ruleName}"`, "ai")
+    }
+    if (learned?.requeuedCount > 0) {
+      showToast(`Ollama flagged ${learned.requeuedCount} similar transaction${learned.requeuedCount > 1 ? 's' : ''} for review`, "ai")
+    }
   }, [])
 
   const handleWizardSplit = useCallback(async (txId: string, fragments: any[]) => {
@@ -227,8 +235,19 @@ export default function Transactions() {
                   <td className={`px-4 py-2 text-right font-medium whitespace-nowrap ${tx.amount < 0 ? "text-green-600" : "text-slate-800"}`}>
                     {tx.amount < 0 ? "+" : ""}{fmt(tx.amount)}
                   </td>
-                  <td className={`px-4 py-2 text-xs whitespace-nowrap ${statusColor[tx.review_status] ?? "text-slate-400"}`}>
-                    {(tx.review_status ?? "").replace(/_/g, " ")}
+                  <td className="px-4 py-2 whitespace-nowrap">
+                    <span className={`text-xs ${statusColor[tx.review_status] ?? "text-slate-400"}`}>
+                      {(tx.review_status ?? "").replace(/_/g, " ")}
+                    </span>
+                    {tx.review_status === "auto_classified" && tx.rule_id && (
+                      <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded bg-blue-50 text-blue-600" title="Classified by rule">rule</span>
+                    )}
+                    {tx.flag_reason?.startsWith("AI:") && (
+                      <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 font-medium" title={tx.flag_reason}>AI</span>
+                    )}
+                    {tx.flag_reason?.includes("same merchant classified differently") && (
+                      <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-medium" title={tx.flag_reason}>conflict</span>
+                    )}
                   </td>
                   <td className="px-4 py-2">
                     <button
