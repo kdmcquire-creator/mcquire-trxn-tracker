@@ -264,7 +264,7 @@ export function validateExpenseReportReadiness(db: CompatDb, dateFrom: string, d
     FROM transactions t
     WHERE t.bucket='Peak 10'
     AND t.p10_category IN ('Meals & Meetings - external','Meals & Meetings - internal','Meals & Meetings - internal and external mixed attendees')
-    AND (t.description_notes IS NULL OR TRIM(t.description_notes) = '')
+    AND (t.description_notes IS NULL OR TRIM(t.description_notes) = '' OR t.description_notes = 'null')
     AND t.transaction_date >= ? AND t.transaction_date <= ?
     AND t.review_status IN ('auto_classified','manually_classified')
     AND NOT EXISTS (SELECT 1 FROM transactions c WHERE c.split_parent_id = t.id)

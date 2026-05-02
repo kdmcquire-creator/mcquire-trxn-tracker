@@ -55,7 +55,7 @@ contextBridge.exposeInMainWorld('api', {
 
   reports: {
     generateExpenseReport:       (payload: any)                                  => ipcRenderer.invoke('reports:generate-expense-report', payload),
-    checkExpenseReportReadiness: ()                                               => ipcRenderer.invoke('reports:check-expense-report-readiness'),
+    checkExpenseReportReadiness: (payload?: any)                                  => ipcRenderer.invoke('reports:check-expense-report-readiness', payload),
     getBlockerTransactions:      (payload?: { dateFrom?: string; dateTo?: string }) => ipcRenderer.invoke('reports:get-blocker-transactions', payload),
   },
 
