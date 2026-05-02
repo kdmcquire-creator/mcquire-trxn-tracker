@@ -132,6 +132,7 @@ export function registerFinancialStatementsHandlers(
           AND (t.description_notes IS NULL OR t.description_notes = '')
           AND t.transaction_date >= ? AND t.transaction_date <= ?
           AND t.review_status IN ('auto_classified','manually_classified')
+          AND NOT EXISTS (SELECT 1 FROM transactions c WHERE c.split_parent_id = t.id)
         ORDER BY t.transaction_date DESC
       `).all(dateFrom, dateTo)
       const attSplits = db.prepare(`

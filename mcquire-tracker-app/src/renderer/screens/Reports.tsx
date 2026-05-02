@@ -123,7 +123,7 @@ export default function Reports() {
     setCheckingReadiness(true)
     setError(null)
     try {
-      const raw = await window.api.reports.checkExpenseReportReadiness().catch(() => null)
+      const raw = await window.api.reports.checkExpenseReportReadiness({ dateFrom, dateTo }).catch(() => null)
       const result = unwrap<{ ready: boolean; blockers: string[]; warnings: string[] } | null>(raw, null)
       if (result) {
         setReadiness({
