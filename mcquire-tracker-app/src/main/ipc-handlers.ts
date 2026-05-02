@@ -511,14 +511,35 @@ export function registerAppIpcHandlers(state: AppState): void {
     return { success: false, error: 'Ollama classification returned no result' }
   })
 
-  // Load Ollama config from DB on startup
+  // Load Ollama config from DB on startup, auto-detect model if needed
   const db = getDb()
   if (db) {
     const enabledRow = db.prepare("SELECT value FROM settings WHERE key = 'ollama_enabled'").get() as { value: string } | undefined
     const modelRow = db.prepare("SELECT value FROM settings WHERE key = 'ollama_model'").get() as { value: string } | undefined
+    const storedModel = modelRow?.value || undefined
     configureOllama({
       enabled: enabledRow?.value === '1',
-      model: modelRow?.value || undefined,
+      model: storedModel,
     })
+
+    // If enabled, verify the model exists and auto-correct if needed
+    if (enabledRow?.value === '1') {
+      testOllamaConnection().then(result => {
+        if (result.connected && result.models.length > 0) {
+          const currentModel = getOllamaModel()
+          const modelExists = result.models.some(m => m.startsWith(currentModel))
+          if (!modelExists) {
+            const bestModel = result.models[0]
+            console.log(`[Ollama] Configured model "${currentModel}" not found, switching to "${bestModel}"`)
+            configureOllama({ model: bestModel })
+            db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+              .run('ollama_model', bestModel)
+          } else {
+            console.log(`[Ollama] Connected, using model "${currentModel}"`)
+          }
+        }
+      }).catch(() => {})
+    }
+  }
   }
 }

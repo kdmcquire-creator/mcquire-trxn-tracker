@@ -18,7 +18,7 @@ import type { CompatDb } from './database'
 import type { Bucket } from '../../src/shared/types'
 
 const OLLAMA_BASE_URL = 'http://localhost:11434'
-const DEFAULT_MODEL = 'mistral'
+const DEFAULT_MODEL = 'llama3'
 
 interface OllamaClassification {
   bucket: Bucket
