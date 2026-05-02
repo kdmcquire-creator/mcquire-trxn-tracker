@@ -541,5 +541,4 @@ export function registerAppIpcHandlers(state: AppState): void {
       }).catch(() => {})
     }
   }
-  }
 }
