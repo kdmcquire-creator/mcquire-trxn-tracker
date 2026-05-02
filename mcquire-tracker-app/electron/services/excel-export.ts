@@ -258,17 +258,23 @@ export function validateExpenseReportReadiness(db: CompatDb, dateFrom: string, d
   const warnings: string[] = []
 
   // Check for Meals & Meetings with no description (exclude split parents)
-  const missingDesc = db.prepare(`
-    SELECT COUNT(*) as c FROM transactions t
+  const missingDescRows = db.prepare(`
+    SELECT t.id, t.merchant_name, t.description_raw, t.description_notes, t.p10_category,
+           t.transaction_date, t.review_status, t.is_split_child, t.split_parent_id
+    FROM transactions t
     WHERE t.bucket='Peak 10'
     AND t.p10_category IN ('Meals & Meetings - external','Meals & Meetings - internal','Meals & Meetings - internal and external mixed attendees')
-    AND (t.description_notes IS NULL OR t.description_notes = '')
+    AND (t.description_notes IS NULL OR TRIM(t.description_notes) = '')
     AND t.transaction_date >= ? AND t.transaction_date <= ?
     AND t.review_status IN ('auto_classified','manually_classified')
     AND NOT EXISTS (SELECT 1 FROM transactions c WHERE c.split_parent_id = t.id)
-  `).get(dateFrom, dateTo) as { c: number }
-  if (missingDesc.c > 0) {
-    blocking.push(`${missingDesc.c} Meals & Meetings transactions missing attendee names in Description/Notes`)
+  `).all(dateFrom, dateTo) as Array<any>
+  if (missingDescRows.length > 0) {
+    console.log(`[Readiness] Found ${missingDescRows.length} meals missing notes (${dateFrom} to ${dateTo}):`)
+    for (const r of missingDescRows.slice(0, 5)) {
+      console.log(`  - ${r.transaction_date} ${r.merchant_name ?? r.description_raw} cat="${r.p10_category}" notes="${r.description_notes}" status=${r.review_status} split_child=${r.is_split_child} parent=${r.split_parent_id}`)
+    }
+    blocking.push(`${missingDescRows.length} Meals & Meetings transactions missing attendee names in Description/Notes`)
   }
 
   // Check for unflagged AT&T splits
