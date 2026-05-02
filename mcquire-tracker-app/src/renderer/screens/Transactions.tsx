@@ -49,7 +49,7 @@ export default function Transactions() {
   const [sortBy, setSortBy] = useState<"date" | "amount" | "merchant">("date")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc")
   const [page, setPage] = useState(1)
-  const PAGE_SIZE = 100
+  const [pageSize, setPageSize] = useState(250)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -90,8 +90,10 @@ export default function Transactions() {
       return sortDir === "asc" ? v : -v
     })
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
-  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+  const showAll = pageSize === 0
+  const effectivePageSize = showAll ? filtered.length : pageSize
+  const totalPages = showAll ? 1 : Math.max(1, Math.ceil(filtered.length / effectivePageSize))
+  const paginated = showAll ? filtered : filtered.slice((page - 1) * effectivePageSize, page * effectivePageSize)
 
   const totalAmount = filtered.reduce((s, t) => s + (t.amount ?? 0), 0)
 
@@ -179,6 +181,15 @@ export default function Transactions() {
           className="border border-slate-300 rounded-lg px-3 py-2 text-sm" title="From date" />
         <input type="date" value={dateTo} onChange={e => { setDateTo(e.target.value); setPage(1) }}
           className="border border-slate-300 rounded-lg px-3 py-2 text-sm" title="To date" />
+        <select value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setPage(1) }}
+          className="border border-slate-300 rounded-lg px-3 py-2 text-sm" title="Rows per page">
+          <option value={25}>25 rows</option>
+          <option value={50}>50 rows</option>
+          <option value={100}>100 rows</option>
+          <option value={250}>250 rows</option>
+          <option value={500}>500 rows</option>
+          <option value={0}>All</option>
+        </select>
       </div>
 
       {/* Table */}
