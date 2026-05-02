@@ -983,6 +983,137 @@ function AiClassificationTab() {
           <li>Creating a rule after accepting a suggestion prevents future AI calls for that merchant</li>
         </ul>
       </div>
+
+      {/* ── Ollama Local AI ──────────────────────────────────────────────────── */}
+      <OllamaSection />
+    </div>
+  )
+}
+
+function OllamaSection() {
+  const [config, setConfig] = useState<{ enabled: boolean; model: string }>({ enabled: false, model: 'mistral' })
+  const [models, setModels] = useState<string[]>([])
+  const [connected, setConnected] = useState<boolean | null>(null)
+  const [testing, setTesting] = useState(false)
+  const [status, setStatus] = useState<string | null>(null)
+
+  useEffect(() => {
+    window.api.ollama?.getConfig?.().then((res: any) => {
+      if (res) setConfig({ enabled: res.enabled ?? false, model: res.model ?? 'mistral' })
+    }).catch(() => {})
+  }, [])
+
+  const testConnection = async () => {
+    setTesting(true)
+    setStatus(null)
+    try {
+      const result = await window.api.ollama.testConnection()
+      setConnected(result.connected)
+      setModels(result.models ?? [])
+      if (result.connected) {
+        setStatus(`Connected. ${result.models.length} model${result.models.length !== 1 ? 's' : ''} available.`)
+      } else {
+        setStatus(`Not connected: ${result.error ?? 'unknown'}. Make sure Ollama is running (ollama serve).`)
+      }
+    } catch (e: any) {
+      setConnected(false)
+      setStatus("Connection failed: " + (e?.message ?? "unknown"))
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  const toggleEnabled = async () => {
+    const newEnabled = !config.enabled
+    await window.api.ollama.setConfig({ enabled: newEnabled })
+    setConfig(prev => ({ ...prev, enabled: newEnabled }))
+  }
+
+  const changeModel = async (model: string) => {
+    await window.api.ollama.setConfig({ model })
+    setConfig(prev => ({ ...prev, model }))
+  }
+
+  return (
+    <div className="border-t border-slate-200 pt-6 mt-6 space-y-4">
+      <div>
+        <h2 className="text-lg font-semibold text-slate-800 mb-1">Ollama — Local AI (Free)</h2>
+        <p className="text-sm text-slate-500">
+          Runs entirely on your machine. No cloud, no API costs. Learns patterns from your classification history
+          including which card, amount ranges, day of week, and location signals.
+        </p>
+      </div>
+
+      {/* Connection status */}
+      <div className={`rounded-lg p-4 border ${connected === true ? 'bg-green-50 border-green-200' : connected === false ? 'bg-red-50 border-red-200' : 'bg-slate-50 border-slate-200'}`}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className={`w-2 h-2 rounded-full ${connected === true ? 'bg-green-500' : connected === false ? 'bg-red-500' : 'bg-slate-400'}`} />
+            <span className="text-sm font-medium text-slate-700">
+              {connected === true ? "Ollama connected" : connected === false ? "Not connected" : "Not tested"}
+            </span>
+          </div>
+          <button onClick={testConnection} disabled={testing}
+            className="px-3 py-1.5 bg-slate-700 text-white text-xs rounded-lg hover:bg-slate-800 disabled:opacity-50">
+            {testing ? "Testing..." : "Test Connection"}
+          </button>
+        </div>
+        {status && <p className="text-xs text-slate-500 mt-2">{status}</p>}
+      </div>
+
+      {/* Enable/disable toggle */}
+      <div className="flex items-center justify-between">
+        <div>
+          <span className="text-sm font-medium text-slate-700">Enable Ollama AI</span>
+          <p className="text-xs text-slate-400">When enabled, the learning engine uses Ollama for multi-factor analysis</p>
+        </div>
+        <button onClick={toggleEnabled}
+          className={`relative w-11 h-6 rounded-full transition-colors ${config.enabled ? 'bg-green-500' : 'bg-slate-300'}`}>
+          <div className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${config.enabled ? 'translate-x-5.5 left-0.5' : 'left-0.5'}`}
+            style={{ transform: config.enabled ? 'translateX(22px)' : 'translateX(2px)' }} />
+        </button>
+      </div>
+
+      {/* Model selector */}
+      <div>
+        <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1">Model</label>
+        {models.length > 0 ? (
+          <select value={config.model} onChange={e => changeModel(e.target.value)}
+            className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
+            {models.map(m => <option key={m} value={m}>{m}</option>)}
+          </select>
+        ) : (
+          <input type="text" value={config.model} onChange={e => changeModel(e.target.value)}
+            placeholder="mistral"
+            className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+        )}
+        <p className="text-xs text-slate-400 mt-1">
+          Recommended: mistral (7B, fast) or llama3 (8B, more accurate). Install with: ollama pull mistral
+        </p>
+      </div>
+
+      {/* How it works */}
+      <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
+        <h3 className="text-sm font-semibold text-slate-700 mb-2">How Ollama learns</h3>
+        <ul className="text-xs text-slate-500 space-y-1 list-disc list-inside">
+          <li>Every manual classification is stored as training context</li>
+          <li>When a contradiction is detected, Ollama considers card, amount, day of week, and history</li>
+          <li>Only flags transactions as ambiguous when the LLM agrees it's a real conflict</li>
+          <li>Over time, fewer false-positive contradictions as it learns your patterns</li>
+          <li>Runs on your local machine — no data leaves your computer</li>
+        </ul>
+      </div>
+
+      {/* Setup instructions */}
+      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+        <h3 className="text-sm font-semibold text-blue-800 mb-2">Quick Setup</h3>
+        <ol className="text-xs text-blue-700 space-y-1 list-decimal list-inside">
+          <li>Download Ollama from <span className="font-mono">ollama.com</span></li>
+          <li>Run installer, then open a terminal and run: <span className="font-mono">ollama pull mistral</span></li>
+          <li>Ollama runs in the background automatically</li>
+          <li>Click "Test Connection" above, then enable</li>
+        </ol>
+      </div>
     </div>
   )
 }

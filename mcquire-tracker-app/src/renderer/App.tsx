@@ -186,6 +186,12 @@ declare global {
         suggest: (tx: any) => Promise<any>
         suggestBatch: (transactions: any[]) => Promise<any>
       }
+      ollama: {
+        testConnection: () => Promise<any>
+        getConfig: () => Promise<any>
+        setConfig: (config: { enabled?: boolean; model?: string }) => Promise<any>
+        suggest: (tx: any) => Promise<any>
+      }
     }
   }
 }

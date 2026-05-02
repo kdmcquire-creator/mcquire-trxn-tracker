@@ -96,6 +96,14 @@ contextBridge.exposeInMainWorld('api', {
     suggestBatch: (transactions: any[]) => ipcRenderer.invoke('claude:suggest-batch', transactions),
   },
 
+  // ── Ollama Local AI ─────────────────────────────────────────────────────────
+  ollama: {
+    testConnection: ()                                              => ipcRenderer.invoke('ollama:test-connection'),
+    getConfig:      ()                                              => ipcRenderer.invoke('ollama:get-config'),
+    setConfig:      (config: { enabled?: boolean; model?: string }) => ipcRenderer.invoke('ollama:set-config', config),
+    suggest:        (tx: any)                                       => ipcRenderer.invoke('ollama:suggest', tx),
+  },
+
 })
 
 // ─────────────────────────────────────────────────────────────────────────────

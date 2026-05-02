@@ -1,6 +1,7 @@
 import type { CompatDb } from './database'
 import type { Rule, Bucket } from '../../src/shared/types'
 import { createHash } from 'crypto'
+import { isOllamaEnabled, analyzeContradiction, loadHistoricalDecisions } from './ollama.service'
 
 // Houston-only restaurant confirmed list
 const HOUSTON_ONLY_RESTAURANTS = [
@@ -288,10 +289,10 @@ function upsertVendor(
  *
  * Returns a summary of actions taken.
  */
-export function learnFromClassification(
+export async function learnFromClassification(
   db: CompatDb,
   txId: string
-): { ruleCreated: boolean; ruleName?: string; requeuedCount: number } {
+): Promise<{ ruleCreated: boolean; ruleName?: string; requeuedCount: number }> {
   const { v4: uuidv4 } = require('uuid')
 
   // Load the transaction that was just classified
@@ -373,18 +374,28 @@ export function learnFromClassification(
 
   // ── Step 2: Flag contradicting auto-classified transactions ────────────
   // Only targets auto_classified — never touches manually_classified.
-  // If we just said "merchant X is Peak 10" but other transactions from merchant X
-  // were auto-classified as something else, those are now ambiguous.
+  // If Ollama is available, use multi-factor analysis (card, amount, day of week)
+  // to determine if the contradiction is real. Otherwise fall back to merchant-only.
   const contradictions = db.prepare(`
-    SELECT id, bucket FROM transactions
-    WHERE merchant_name = ?
-      AND bucket != ?
-      AND bucket IS NOT NULL
-      AND review_status = 'auto_classified'
-      AND id != ?
-  `).all(tx.merchant_name, tx.bucket, tx.id) as Array<{ id: string; bucket: string }>
+    SELECT t.id, t.bucket, t.amount, t.transaction_date, t.description_raw,
+           t.merchant_name, t.category_source, a.account_mask
+    FROM transactions t
+    JOIN accounts a ON a.id = t.account_id
+    WHERE t.merchant_name = ?
+      AND t.bucket != ?
+      AND t.bucket IS NOT NULL
+      AND t.review_status = 'auto_classified'
+      AND t.id != ?
+  `).all(tx.merchant_name, tx.bucket, tx.id) as Array<{
+    id: string; bucket: string; amount: number; transaction_date: string;
+    description_raw: string; merchant_name: string; category_source: string | null;
+    account_mask: string
+  }>
 
   if (contradictions.length > 0) {
+    const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+    const history = isOllamaEnabled() ? loadHistoricalDecisions(db, tx.merchant_name!) : []
+
     const requeue = db.prepare(`
       UPDATE transactions
       SET review_status = 'pending_review',
@@ -392,15 +403,55 @@ export function learnFromClassification(
           updated_at = datetime('now')
       WHERE id = ?
     `)
-    const run = db.transaction(() => {
-      for (const row of contradictions) {
-        const reason = `Was auto-classified as ${row.bucket}, but you classified another "${tx.merchant_name}" as ${tx.bucket}. Which is correct?`
-        requeue.run(reason, row.id)
+
+    const toRequeue: Array<{ id: string; reason: string }> = []
+
+    for (const row of contradictions) {
+      let shouldRequeue = true
+      let reason = `Was auto-classified as ${row.bucket}, but you classified another "${tx.merchant_name}" as ${tx.bucket}. Which is correct?`
+
+      // If Ollama is available, ask it whether this is a real contradiction
+      // considering card, amount, day of week patterns
+      if (isOllamaEnabled() && history.length >= 2) {
+        try {
+          const txDay = dayNames[new Date(row.transaction_date + 'T12:00:00').getDay()]
+          const analysis = await analyzeContradiction(
+            {
+              merchant_name: row.merchant_name,
+              description_raw: row.description_raw,
+              amount: row.amount,
+              transaction_date: row.transaction_date,
+              account_mask: row.account_mask,
+              category_source: row.category_source,
+              flag_reason: null,
+              day_of_week: txDay,
+            },
+            row.bucket,
+            tx.bucket,
+            history
+          )
+          if (analysis) {
+            shouldRequeue = analysis.isTrue
+            if (analysis.isTrue) {
+              reason = `AI: ${analysis.reasoning} (was ${row.bucket}, suggest reviewing)`
+            }
+          }
+        } catch {}
       }
-    })
-    run()
-    requeuedCount = contradictions.length
-    console.log(`[Learning] Requeued ${requeuedCount} contradicting auto-classified txns for "${tx.merchant_name}"`)
+
+      if (shouldRequeue) {
+        toRequeue.push({ id: row.id, reason })
+      }
+    }
+
+    if (toRequeue.length > 0) {
+      const run = db.transaction(() => {
+        for (const item of toRequeue) requeue.run(item.reason, item.id)
+      })
+      run()
+      requeuedCount = toRequeue.length
+      console.log(`[Learning] Requeued ${requeuedCount} contradicting auto-classified txns for "${tx.merchant_name}"`)
+    }
   }
 
   return { ruleCreated, ruleName, requeuedCount }

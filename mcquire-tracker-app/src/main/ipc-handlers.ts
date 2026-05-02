@@ -6,6 +6,8 @@ import * as path from 'path'
 import type { CompatDb } from '../../electron/services/database'
 import { reclassifyPendingAfterRuleChange, invalidateTripDateCache, learnFromClassification } from '../../electron/services/classification-engine'
 import { saveClaudeApiKey, hasClaudeApiKey, deleteClaudeApiKey, suggestClassification, suggestBatch } from '../../electron/services/claude-classifier'
+import { configureOllama, isOllamaEnabled, getOllamaModel, testOllamaConnection, classifyWithOllama, loadHistoricalDecisions } from '../../electron/services/ollama.service'
+import { P10_CATEGORIES, LLC_CATEGORIES } from '../shared/types'
 
 interface AppState {
   db: () => CompatDb | null
@@ -116,7 +118,7 @@ export function registerAppIpcHandlers(state: AppState): void {
     return { success: true, data: rows }
   })
 
-  ipcMain.handle('transactions:classify', (_event: Electron.IpcMainInvokeEvent, id: string, update: Record<string, any>) => {
+  ipcMain.handle('transactions:classify', async (_event: Electron.IpcMainInvokeEvent, id: string, update: Record<string, any>) => {
     const db = getDb()
     if (!db) return { success: false, error: 'DB not initialized' }
     const allowed = ['bucket', 'p10_category', 'llc_category', 'description_notes', 'review_status', 'flag_reason', 'period_label']
@@ -127,10 +129,11 @@ export function registerAppIpcHandlers(state: AppState): void {
       .run(...fields.map((f) => update[f]), id)
 
     // Learning engine: auto-generate rules from patterns, flag contradictions
+    // Uses Ollama (if available) for multi-factor analysis
     let learned: { ruleCreated: boolean; ruleName?: string; requeuedCount: number } | undefined
     if (update.review_status === 'manually_classified') {
       try {
-        learned = learnFromClassification(db, id)
+        learned = await learnFromClassification(db, id)
       } catch (err) {
         console.error('[Learning] Error:', err)
       }
@@ -460,4 +463,62 @@ export function registerAppIpcHandlers(state: AppState): void {
       return { success: false, error: err.message }
     }
   })
+
+  // ── Ollama Local AI ─────────────────────────────────────────────────────────
+
+  ipcMain.handle('ollama:test-connection', async () => {
+    return await testOllamaConnection()
+  })
+
+  ipcMain.handle('ollama:get-config', () => {
+    return { enabled: isOllamaEnabled(), model: getOllamaModel() }
+  })
+
+  ipcMain.handle('ollama:set-config', (_event: Electron.IpcMainInvokeEvent, config: { enabled?: boolean; model?: string }) => {
+    configureOllama(config)
+    const db = getDb()
+    if (db) {
+      if (config.enabled !== undefined) {
+        db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+          .run('ollama_enabled', config.enabled ? '1' : '0')
+      }
+      if (config.model !== undefined) {
+        db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+          .run('ollama_model', config.model)
+      }
+    }
+    return { success: true }
+  })
+
+  ipcMain.handle('ollama:suggest', async (_event: Electron.IpcMainInvokeEvent, tx: any) => {
+    const db = getDb()
+    if (!db) return { success: false, error: 'DB not initialized' }
+    const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+    const txDay = dayNames[new Date(tx.transaction_date + 'T12:00:00').getDay()]
+
+    const history = loadHistoricalDecisions(db, tx.merchant_name ?? tx.description_raw ?? '')
+    const buckets = ['Peak 10', 'Moonsmoke LLC', 'Watersound Investments LLC', 'Personal', 'Exclude']
+
+    const result = await classifyWithOllama(
+      { ...tx, day_of_week: txDay },
+      history,
+      buckets,
+      P10_CATEGORIES,
+      LLC_CATEGORIES
+    )
+
+    if (result) return { success: true, data: result }
+    return { success: false, error: 'Ollama classification returned no result' }
+  })
+
+  // Load Ollama config from DB on startup
+  const db = getDb()
+  if (db) {
+    const enabledRow = db.prepare("SELECT value FROM settings WHERE key = 'ollama_enabled'").get() as { value: string } | undefined
+    const modelRow = db.prepare("SELECT value FROM settings WHERE key = 'ollama_model'").get() as { value: string } | undefined
+    configureOllama({
+      enabled: enabledRow?.value === '1',
+      model: modelRow?.value || undefined,
+    })
+  }
 }
