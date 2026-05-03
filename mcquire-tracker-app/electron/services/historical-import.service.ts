@@ -278,7 +278,7 @@ export class HistoricalImportService {
           continue
         }
 
-        // Cross-account dedup: same merchant + amount + date on a different account
+        // Cross-account dedup: same merchant + amount + date (±2 days) on a different account
         // means this charge already exists (e.g., DoorDash appearing on two cards).
         const merchantNorm = normalizeMerchant(
           row['Merchant'] || row['Original Statement'] || row['Description'] || ''
@@ -291,11 +291,11 @@ export class HistoricalImportService {
              WHERE account_id != ?
                AND merchant_name = ?
                AND amount = ?
-               AND transaction_date = ?
+               AND ABS(julianday(transaction_date) - julianday(?)) <= 2
                AND bucket != 'Exclude'`
           )
           .get(accountId, merchantNorm, txAmount, txDate) as { n: number }
-        if (crossAcct.n === 1) {
+        if (crossAcct.n >= 1) {
           // Insert as Exclude so the hash is recorded and we don't re-process
           this.db.prepare(
             `INSERT OR IGNORE INTO transactions

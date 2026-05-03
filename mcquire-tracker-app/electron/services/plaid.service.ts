@@ -430,8 +430,8 @@ export class PlaidService {
     date: string,
     accountId: string
   ): boolean {
-    // Allow ±1 day tolerance to catch pending vs posted date offsets
-    // (e.g., card 9007 shows pending on day N, card 2419 posts on day N+1)
+    // Allow ±2 day tolerance to catch pending vs posted date offsets
+    // (e.g., card 9007 shows pending on day N, card 2419 posts on day N+1 or N+2)
     const matches = this.db
       .prepare(
         `SELECT COUNT(*) as n FROM transactions t

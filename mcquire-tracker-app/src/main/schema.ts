@@ -513,6 +513,48 @@ function runMigrations(database: CompatDb): void {
 
     database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('009-fuzzy-date-2day-dedup')
   }
+
+  // Migration 010: comprehensive cross-account dedup ±2 days
+  // Previous migrations missed some because they filtered on review_status.
+  // This one catches ALL remaining dupes: same merchant + same amount +
+  // different account + within 2 days. Keeps the earlier-created transaction,
+  // excludes the later one regardless of its current status.
+  if (!applied('010-comprehensive-cross-account-dedup')) {
+    const allDupes = database.prepare(`
+      SELECT t2.id
+      FROM transactions t1
+      JOIN transactions t2
+        ON t2.merchant_name = t1.merchant_name
+        AND t2.amount = t1.amount
+        AND ABS(julianday(t2.transaction_date) - julianday(t1.transaction_date)) <= 2
+        AND t2.account_id != t1.account_id
+        AND t2.id != t1.id
+      WHERE t1.bucket != 'Exclude'
+        AND t2.bucket != 'Exclude'
+        AND t1.merchant_name IS NOT NULL
+        AND t1.merchant_name != ''
+        AND t1.created_at <= t2.created_at
+    `).all() as Array<{ id: string }>
+
+    const uniqueIds = [...new Set(allDupes.map(d => d.id))]
+
+    if (uniqueIds.length > 0) {
+      const excludeDupe = database.prepare(`
+        UPDATE transactions
+        SET bucket = 'Exclude', review_status = 'auto_classified',
+            flag_reason = 'Cross-account duplicate ±2 days (migration 010)',
+            updated_at = datetime('now')
+        WHERE id = ?
+      `)
+      const run = database.transaction(() => {
+        for (const id of uniqueIds) excludeDupe.run(id)
+      })
+      run()
+      console.log(`[Migration 010] Excluded ${uniqueIds.length} remaining cross-account duplicates (±2 days, all statuses)`)
+    }
+
+    database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('010-comprehensive-cross-account-dedup')
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
