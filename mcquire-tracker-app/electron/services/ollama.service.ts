@@ -315,18 +315,25 @@ export async function analyzeDuplicateBatch(
     ))
 
     const history = db.prepare(`
-      SELECT transaction_date, amount FROM transactions
+      SELECT transaction_date, amount, bucket, flag_reason FROM transactions
       WHERE merchant_name = ? AND account_id = (
         SELECT id FROM accounts WHERE account_mask = ? LIMIT 1
-      ) AND bucket != 'Exclude'
+      )
       ORDER BY transaction_date DESC LIMIT 20
-    `).all(pair.merchant1, pair.account_mask) as Array<{ transaction_date: string; amount: number }>
+    `).all(pair.merchant1, pair.account_mask) as Array<{ transaction_date: string; amount: number; bucket: string; flag_reason: string | null }>
 
-    const historyBlock = history.length > 2
-      ? `\nCharge history for "${merchant}" on this card (last ${history.length} charges):\n${
-          history.map(h => `  ${h.transaction_date}  $${Math.abs(h.amount).toFixed(2)}`).join('\n')
-        }`
-      : ''
+    const confirmedDupes = history.filter(h => h.flag_reason?.includes('Duplicate charge') || h.flag_reason?.includes('card hold'))
+    const activeCharges = history.filter(h => h.bucket !== 'Exclude')
+
+    let historyBlock = ''
+    if (activeCharges.length > 2) {
+      historyBlock += `\nCharge history for "${merchant}" on this card (last ${activeCharges.length} active charges):\n${
+        activeCharges.map(h => `  ${h.transaction_date}  $${Math.abs(h.amount).toFixed(2)}`).join('\n')
+      }`
+    }
+    if (confirmedDupes.length > 0) {
+      historyBlock += `\nUser has previously confirmed ${confirmedDupes.length} duplicate/card-hold for this merchant.`
+    }
 
     const prompt = `You analyze financial transactions for duplicates vs legitimate recurring charges.
 
@@ -344,6 +351,8 @@ Key patterns:
 - Charges every ~7, ~14, or ~30 days = likely recurring/subscription
 - Same merchant but different merchant name spelling = possibly duplicate
 - Common merchants like restaurants, gas stations — could be separate visits
+- Hotels/restaurants often have pre-auth holds that post at a different amount — if amounts match exactly, the hold may not have been released
+- If the user has previously confirmed duplicates/holds for this merchant, similar patterns are more likely duplicates
 
 Respond with ONLY valid JSON:
 {"is_duplicate": true/false, "confidence": 0.0-1.0, "reasoning": "one sentence"}`

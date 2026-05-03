@@ -197,6 +197,23 @@ export default function AssignmentWizard({ transactions, onClassify, onSplit, on
   const handleEntitySelect = useCallback((selectedEntity: string) => {
     setEntity(selectedEntity)
 
+    // Duplicate / Card Hold — instant save, skip category + notes
+    if (selectedEntity === "Exclude:Duplicate" || selectedEntity === "Exclude:CardHold") {
+      const reason = selectedEntity === "Exclude:Duplicate"
+        ? "Duplicate charge (confirmed by user)"
+        : "Pre-authorization / card hold (confirmed by user)"
+      onClassify(tx.id, {
+        bucket: "Exclude",
+        review_status: "manually_classified",
+        flag_reason: reason,
+        description_notes: reason,
+      }).then(() => {
+        if (isLastTx) onClose()
+        else setTxIdx(i => i + 1)
+      }).catch((e: any) => alert("Error: " + (e?.message ?? "unknown")))
+      return
+    }
+
     // Personal and Exclude skip category step
     if (selectedEntity === "Personal" || selectedEntity === "Exclude") {
       setCategory("")
@@ -360,13 +377,23 @@ export default function AssignmentWizard({ transactions, onClassify, onSplit, on
                 ))}
               </div>
 
-              {/* Split option */}
-              <div className="pt-2 border-t border-slate-200">
+              {/* Split + Duplicate/Hold options */}
+              <div className="pt-2 border-t border-slate-200 space-y-2">
                 <button onClick={() => setIsSplitMode(true)}
                   className="w-full py-3 px-4 rounded-xl text-sm font-semibold bg-orange-100 text-orange-700 hover:bg-orange-200 transition-all text-left">
                   Split Transaction
                   {isAtt && <span className="ml-2 text-xs text-orange-500">(AT&T bill detected)</span>}
                 </button>
+                <div className="grid grid-cols-2 gap-2">
+                  <button onClick={() => handleEntitySelect("Exclude:Duplicate")}
+                    className="py-2.5 px-4 rounded-xl text-sm font-semibold bg-rose-50 text-rose-700 hover:bg-rose-100 transition-all text-left">
+                    Duplicate Charge
+                  </button>
+                  <button onClick={() => handleEntitySelect("Exclude:CardHold")}
+                    className="py-2.5 px-4 rounded-xl text-sm font-semibold bg-amber-50 text-amber-700 hover:bg-amber-100 transition-all text-left">
+                    Pre-auth / Card Hold
+                  </button>
+                </div>
               </div>
             </div>
           )}
