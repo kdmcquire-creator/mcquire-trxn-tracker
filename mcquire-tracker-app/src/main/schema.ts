@@ -555,6 +555,20 @@ function runMigrations(database: CompatDb): void {
 
     database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('010-comprehensive-cross-account-dedup')
   }
+
+  // Migration 011: reset expense_report_id on all transactions and clear
+  // draft expense reports. No reports were actually submitted — the old
+  // code tagged transactions immediately on generation, before the
+  // draft/submit workflow existed.
+  if (!applied('011-reset-expense-report-tags')) {
+    const cleared = database.prepare(`
+      UPDATE transactions SET expense_report_id = NULL, updated_at = datetime('now')
+      WHERE expense_report_id IS NOT NULL
+    `).run()
+    database.prepare("DELETE FROM expense_reports").run()
+    console.log(`[Migration 011] Reset expense_report_id on ${cleared.changes} transactions, cleared all draft reports`)
+    database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('011-reset-expense-report-tags')
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
