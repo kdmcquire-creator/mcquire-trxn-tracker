@@ -219,45 +219,60 @@ export default function Transactions() {
             </div>
             <button onClick={() => setDupeMode(false)} className="text-xs text-amber-500 hover:text-amber-700">Close</button>
           </div>
-          {dupes.length === 0 ? (
-            <p className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg p-3">No potential duplicates found.</p>
+          {dupeLoading ? (
+            <p className="text-sm text-amber-700 py-4 text-center">Scanning transactions and running AI analysis... this may take a moment.</p>
+          ) : dupes.length === 0 ? (
+            <p className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg p-3">No suspicious duplicates found.</p>
           ) : (
             <div className="space-y-3">
-              {dupes.map((d, i) => (
-                <div key={i} className="bg-white border border-amber-200 rounded-lg p-4">
-                  <div className="text-xs text-amber-600 font-medium mb-2">
-                    ···{d.account_mask} ({d.institution}) &middot; {fmt(d.amount)} &middot; {Math.round(Math.abs(
-                      (new Date(d.date1 + 'T00:00:00').getTime() - new Date(d.date2 + 'T00:00:00').getTime()) / 86400000
-                    ))} days apart
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    {/* Transaction 1 */}
-                    <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
-                      <div className="font-semibold text-slate-800 text-sm">{d.merchant1 || d.desc1}</div>
-                      <div className="text-xs text-slate-500 mt-1">{d.date1} &middot; {d.bucket1 ?? 'unclassified'} &middot; {(d.status1 ?? '').replace(/_/g, ' ')}</div>
-                      <div className="flex gap-2 mt-2">
-                        <button onClick={() => discardDupe(d.id1)}
-                          className="px-2 py-1 bg-red-100 text-red-700 text-xs rounded hover:bg-red-200">Discard this one</button>
-                        <button onClick={() => { setDupeMode(false); setEditTxId(d.id1) }}
-                          className="px-2 py-1 bg-slate-100 text-slate-600 text-xs rounded hover:bg-slate-200">Edit</button>
+              {dupes.map((d, i) => {
+                const daysBetween = Math.round(Math.abs(
+                  (new Date(d.date1 + 'T00:00:00').getTime() - new Date(d.date2 + 'T00:00:00').getTime()) / 86400000
+                ))
+                return (
+                  <div key={i} className="bg-white border border-amber-200 rounded-lg p-4">
+                    <div className="flex items-start justify-between mb-2">
+                      <div className="text-xs text-amber-600 font-medium">
+                        ···{d.account_mask} ({d.institution}) &middot; {fmt(d.amount)} &middot; {daysBetween} day{daysBetween !== 1 ? 's' : ''} apart
+                      </div>
+                      {d.aiConfidence != null && (
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                          d.aiConfidence >= 0.7 ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
+                        }`}>
+                          AI: {Math.round(d.aiConfidence * 100)}% duplicate
+                        </span>
+                      )}
+                    </div>
+                    {d.aiReasoning && (
+                      <div className="text-xs text-violet-600 bg-violet-50 rounded px-2 py-1.5 mb-2 italic">{d.aiReasoning}</div>
+                    )}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+                        <div className="font-semibold text-slate-800 text-sm">{d.merchant1 || d.desc1}</div>
+                        <div className="text-xs text-slate-500 mt-1">{d.date1} &middot; {d.bucket1 ?? 'unclassified'}</div>
+                        <div className="flex gap-2 mt-2">
+                          <button onClick={() => discardDupe(d.id1)}
+                            className="px-2 py-1 bg-red-100 text-red-700 text-xs rounded hover:bg-red-200">Discard</button>
+                          <button onClick={() => { setDupeMode(false); setEditTxId(d.id1) }}
+                            className="px-2 py-1 bg-slate-100 text-slate-600 text-xs rounded hover:bg-slate-200">Edit</button>
+                        </div>
+                      </div>
+                      <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+                        <div className="font-semibold text-slate-800 text-sm">{d.merchant2 || d.desc2}</div>
+                        <div className="text-xs text-slate-500 mt-1">{d.date2} &middot; {d.bucket2 ?? 'unclassified'}</div>
+                        <div className="flex gap-2 mt-2">
+                          <button onClick={() => discardDupe(d.id2)}
+                            className="px-2 py-1 bg-red-100 text-red-700 text-xs rounded hover:bg-red-200">Discard</button>
+                          <button onClick={() => { setDupeMode(false); setEditTxId(d.id2) }}
+                            className="px-2 py-1 bg-slate-100 text-slate-600 text-xs rounded hover:bg-slate-200">Edit</button>
+                        </div>
                       </div>
                     </div>
-                    {/* Transaction 2 */}
-                    <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
-                      <div className="font-semibold text-slate-800 text-sm">{d.merchant2 || d.desc2}</div>
-                      <div className="text-xs text-slate-500 mt-1">{d.date2} &middot; {d.bucket2 ?? 'unclassified'} &middot; {(d.status2 ?? '').replace(/_/g, ' ')}</div>
-                      <div className="flex gap-2 mt-2">
-                        <button onClick={() => discardDupe(d.id2)}
-                          className="px-2 py-1 bg-red-100 text-red-700 text-xs rounded hover:bg-red-200">Discard this one</button>
-                        <button onClick={() => { setDupeMode(false); setEditTxId(d.id2) }}
-                          className="px-2 py-1 bg-slate-100 text-slate-600 text-xs rounded hover:bg-slate-200">Edit</button>
-                      </div>
-                    </div>
+                    <button onClick={() => setDupes(prev => prev.filter((_, idx) => idx !== i))}
+                      className="mt-2 text-xs text-slate-400 hover:text-slate-600">Keep both — not a duplicate</button>
                   </div>
-                  <button onClick={() => setDupes(prev => prev.filter((_, idx) => idx !== i))}
-                    className="mt-2 text-xs text-slate-400 hover:text-slate-600">Keep both</button>
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </div>

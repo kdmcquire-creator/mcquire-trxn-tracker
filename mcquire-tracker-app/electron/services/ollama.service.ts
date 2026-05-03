@@ -281,3 +281,103 @@ function parseClassificationResponse(
     return null
   }
 }
+
+// ─── Smart duplicate analysis ─────────────────────────────────────────────────
+
+interface DupePair {
+  merchant1: string; merchant2: string
+  desc1: string; desc2: string
+  amount: number
+  date1: string; date2: string
+  account_mask: string; institution: string
+  bucket1: string; bucket2: string
+  id1: string; id2: string
+}
+
+interface DupeAnalysis {
+  is_duplicate: boolean
+  confidence: number
+  reasoning: string
+}
+
+export async function analyzeDuplicateBatch(
+  db: CompatDb,
+  pairs: DupePair[]
+): Promise<Array<DupePair & { analysis: DupeAnalysis }>> {
+  if (!_ollamaEnabled || pairs.length === 0) return []
+
+  const results: Array<DupePair & { analysis: DupeAnalysis }> = []
+
+  for (const pair of pairs) {
+    const merchant = pair.merchant1 || pair.desc1
+    const daysBetween = Math.round(Math.abs(
+      (new Date(pair.date1 + 'T00:00:00').getTime() - new Date(pair.date2 + 'T00:00:00').getTime()) / 86400000
+    ))
+
+    const history = db.prepare(`
+      SELECT transaction_date, amount FROM transactions
+      WHERE merchant_name = ? AND account_id = (
+        SELECT id FROM accounts WHERE account_mask = ? LIMIT 1
+      ) AND bucket != 'Exclude'
+      ORDER BY transaction_date DESC LIMIT 20
+    `).all(pair.merchant1, pair.account_mask) as Array<{ transaction_date: string; amount: number }>
+
+    const historyBlock = history.length > 2
+      ? `\nCharge history for "${merchant}" on this card (last ${history.length} charges):\n${
+          history.map(h => `  ${h.transaction_date}  $${Math.abs(h.amount).toFixed(2)}`).join('\n')
+        }`
+      : ''
+
+    const prompt = `You analyze financial transactions for duplicates vs legitimate recurring charges.
+
+Two charges on the SAME card (···${pair.account_mask}, ${pair.institution}):
+  1. ${pair.date1} — "${pair.merchant1 || pair.desc1}" — $${Math.abs(pair.amount).toFixed(2)} [${pair.bucket1 ?? 'unclassified'}]
+  2. ${pair.date2} — "${pair.merchant2 || pair.desc2}" — $${Math.abs(pair.amount).toFixed(2)} [${pair.bucket2 ?? 'unclassified'}]
+
+Days apart: ${daysBetween}
+${historyBlock}
+
+Analyze: Is this a DUPLICATE (accidental double-charge, pending/posted repeat) or a LEGITIMATE recurring charge (subscription, regular visit, separate purchase)?
+
+Key patterns:
+- Charges 1-3 days apart with identical merchant = likely duplicate (pending vs posted)
+- Charges every ~7, ~14, or ~30 days = likely recurring/subscription
+- Same merchant but different merchant name spelling = possibly duplicate
+- Common merchants like restaurants, gas stations — could be separate visits
+
+Respond with ONLY valid JSON:
+{"is_duplicate": true/false, "confidence": 0.0-1.0, "reasoning": "one sentence"}`
+
+    try {
+      const resp = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: _ollamaModel,
+          prompt,
+          stream: false,
+          options: { temperature: 0.1, num_predict: 150 },
+        }),
+        signal: AbortSignal.timeout(20000),
+      })
+
+      if (!resp.ok) continue
+      const data = await resp.json()
+      const response = data.response ?? ''
+      const jsonMatch = response.match(/\{[^}]+\}/)
+      if (!jsonMatch) continue
+
+      const parsed = JSON.parse(jsonMatch[0])
+      results.push({
+        ...pair,
+        analysis: {
+          is_duplicate: !!parsed.is_duplicate,
+          confidence: Math.min(1, Math.max(0, parseFloat(parsed.confidence) || 0.5)),
+          reasoning: parsed.reasoning ?? '',
+        },
+      })
+    } catch {}
+  }
+
+  return results
+}

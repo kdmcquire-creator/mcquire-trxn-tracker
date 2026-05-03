@@ -6,7 +6,7 @@ import * as path from 'path'
 import type { CompatDb } from '../../electron/services/database'
 import { reclassifyPendingAfterRuleChange, invalidateTripDateCache, learnFromClassification } from '../../electron/services/classification-engine'
 import { saveClaudeApiKey, hasClaudeApiKey, deleteClaudeApiKey, suggestClassification, suggestBatch } from '../../electron/services/claude-classifier'
-import { configureOllama, isOllamaEnabled, getOllamaModel, testOllamaConnection, classifyWithOllama, loadHistoricalDecisions } from '../../electron/services/ollama.service'
+import { configureOllama, isOllamaEnabled, getOllamaModel, testOllamaConnection, classifyWithOllama, loadHistoricalDecisions, analyzeDuplicateBatch } from '../../electron/services/ollama.service'
 import { P10_CATEGORIES, LLC_CATEGORIES } from '../shared/types'
 
 interface AppState {
@@ -101,10 +101,10 @@ export function registerAppIpcHandlers(state: AppState): void {
 
   // ── Same-card potential duplicates ─────────────────────────────────────────
 
-  ipcMain.handle('transactions:find-same-card-dupes', () => {
+  ipcMain.handle('transactions:find-same-card-dupes', async () => {
     const db = getDb()
     if (!db) return { success: true, data: [] }
-    const dupes = db.prepare(`
+    const rawPairs = db.prepare(`
       SELECT t1.id as id1, t2.id as id2,
              t1.merchant_name as merchant1, t2.merchant_name as merchant2,
              t1.description_raw as desc1, t2.description_raw as desc2,
@@ -126,9 +126,29 @@ export function registerAppIpcHandlers(state: AppState): void {
         AND NOT EXISTS (SELECT 1 FROM transactions c WHERE c.split_parent_id = t1.id)
         AND NOT EXISTS (SELECT 1 FROM transactions c WHERE c.split_parent_id = t2.id)
       ORDER BY t1.transaction_date DESC
-      LIMIT 200
-    `).all()
-    return { success: true, data: dupes }
+      LIMIT 100
+    `).all() as any[]
+
+    // If Ollama is enabled, run AI analysis to filter out legitimate recurring charges
+    if (isOllamaEnabled() && rawPairs.length > 0) {
+      try {
+        const analyzed = await analyzeDuplicateBatch(db, rawPairs)
+        // Return only pairs the AI thinks are actual duplicates, plus unanalyzed pairs
+        const analyzedIds = new Set(analyzed.map(a => `${a.id1}-${a.id2}`))
+        const aiDupes = analyzed
+          .filter(a => a.analysis.is_duplicate)
+          .map(a => ({ ...a, aiReasoning: a.analysis.reasoning, aiConfidence: a.analysis.confidence }))
+        // Include any pairs that weren't analyzed (Ollama timeout/error) as unscored
+        const unscored = rawPairs
+          .filter(p => !analyzedIds.has(`${p.id1}-${p.id2}`))
+          .map(p => ({ ...p, aiReasoning: null, aiConfidence: null }))
+        return { success: true, data: [...aiDupes, ...unscored] }
+      } catch (err) {
+        console.error('[DupeDetect] Ollama analysis failed, falling back to raw pairs:', err)
+      }
+    }
+
+    return { success: true, data: rawPairs }
   })
 
   ipcMain.handle('transactions:discard-duplicate', (_event: Electron.IpcMainInvokeEvent, txId: string) => {
