@@ -1,6 +1,5 @@
 import { useEffect, useState, useCallback } from "react"
 import AssignmentWizard from "./AssignmentWizard"
-import { showToast } from "../App"
 
 function unwrap<T>(res: any, fallback: T): T {
   if (res === null || res === undefined) return fallback
@@ -56,17 +55,9 @@ export default function ReviewQueue({ onPendingChange }: Props) {
 
   /* ── Wizard callbacks ────────────────────────────────────────────────────── */
   const handleClassify = useCallback(async (txId: string, update: any) => {
-    const result = await window.api.transactions.classify(txId, update)
+    await window.api.transactions.classify(txId, update)
     setTransactions(prev => prev.filter(t => t.id !== txId))
     onPendingChange?.(transactions.length - 1)
-    // Surface learning engine actions
-    const learned = result?.learned
-    if (learned?.ruleCreated) {
-      showToast(`Rule created: "${learned.ruleName}"`, "ai")
-    }
-    if (learned?.requeuedCount > 0) {
-      showToast(`Ollama flagged ${learned.requeuedCount} similar transaction${learned.requeuedCount > 1 ? 's' : ''} for review`, "ai")
-    }
   }, [transactions.length, onPendingChange])
 
   const handleSplit = useCallback(async (txId: string, fragments: any[]) => {

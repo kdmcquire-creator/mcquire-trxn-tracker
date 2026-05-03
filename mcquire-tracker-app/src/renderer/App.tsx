@@ -56,6 +56,19 @@ export default function App() {
       ;(window as any).electron?.ipcRenderer?.on('lifecycle:lock-conflict', () => setLockWarning(true))
     } catch {}
 
+    // Listen for background learning engine results
+    try {
+      const ipc = (window as any).electron?.ipcRenderer
+      ipc?.on('event:learning-result', (_e: any, learned: any) => {
+        if (learned?.ruleCreated) {
+          addToast(`Rule created: "${learned.ruleName}"`, "ai")
+        }
+        if (learned?.requeuedCount > 0) {
+          addToast(`AI flagged ${learned.requeuedCount} similar transaction${learned.requeuedCount > 1 ? 's' : ''} for review`, "ai")
+        }
+      })
+    } catch {}
+
     try {
       if (window.api?.onNewTransactions) {
         window.api.onNewTransactions(({ count }) => {

@@ -128,18 +128,17 @@ export function registerAppIpcHandlers(state: AppState): void {
     db.prepare(`UPDATE transactions SET ${set}, updated_at = datetime('now') WHERE id = ?`)
       .run(...fields.map((f) => update[f]), id)
 
-    // Learning engine: auto-generate rules from patterns, flag contradictions
-    // Uses Ollama (if available) for multi-factor analysis
-    let learned: { ruleCreated: boolean; ruleName?: string; requeuedCount: number } | undefined
+    // Learning engine runs in background — don't block the UI
     if (update.review_status === 'manually_classified') {
-      try {
-        learned = await learnFromClassification(db, id)
-      } catch (err) {
-        console.error('[Learning] Error:', err)
-      }
+      learnFromClassification(db, id).then(learned => {
+        const win = getMainWindow()
+        if (win && (learned.ruleCreated || learned.requeuedCount > 0)) {
+          win.webContents.send('event:learning-result', learned)
+        }
+      }).catch(err => console.error('[Learning] Error:', err))
     }
 
-    return { success: true, learned }
+    return { success: true }
   })
 
   ipcMain.handle('transactions:run-rules-all', () => {

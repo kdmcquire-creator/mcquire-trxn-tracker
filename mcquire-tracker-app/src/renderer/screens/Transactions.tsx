@@ -1,6 +1,5 @@
 import { useEffect, useState, useCallback } from "react"
 import AssignmentWizard from "./AssignmentWizard"
-import { showToast } from "../App"
 
 function unwrap<T>(res: any, fallback: T): T {
   if (res === null || res === undefined) return fallback
@@ -103,15 +102,8 @@ export default function Transactions() {
   }
 
   const handleWizardClassify = useCallback(async (txId: string, update: any) => {
-    const result = await window.api.transactions.classify(txId, update)
+    await window.api.transactions.classify(txId, update)
     setRows(prev => prev.map(r => r.id === txId ? { ...r, ...update } : r))
-    const learned = result?.learned
-    if (learned?.ruleCreated) {
-      showToast(`Rule created: "${learned.ruleName}"`, "ai")
-    }
-    if (learned?.requeuedCount > 0) {
-      showToast(`Ollama flagged ${learned.requeuedCount} similar transaction${learned.requeuedCount > 1 ? 's' : ''} for review`, "ai")
-    }
   }, [])
 
   const handleWizardSplit = useCallback(async (txId: string, fragments: any[]) => {
