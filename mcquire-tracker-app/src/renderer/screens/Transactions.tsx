@@ -38,6 +38,27 @@ export default function Transactions() {
   const [error, setError] = useState<string | null>(null)
   const [editTxId, setEditTxId] = useState<string | null>(null)
 
+  // Same-card duplicate review
+  const [dupeMode, setDupeMode] = useState(false)
+  const [dupes, setDupes] = useState<any[]>([])
+  const [dupeLoading, setDupeLoading] = useState(false)
+
+  const findDupes = useCallback(async () => {
+    setDupeLoading(true)
+    try {
+      const res = await window.api.transactions.findSameCardDupes()
+      const data = res?.data ?? []
+      setDupes(Array.isArray(data) ? data : [])
+      setDupeMode(true)
+    } catch {} finally { setDupeLoading(false) }
+  }, [])
+
+  const discardDupe = useCallback(async (txId: string) => {
+    await window.api.transactions.discardDuplicate(txId)
+    setDupes(prev => prev.filter(d => d.id1 !== txId && d.id2 !== txId))
+    setRows(prev => prev.filter(r => r.id !== txId))
+  }, [])
+
   // Filters
   const [search, setSearch] = useState("")
   const [filterBucket, setFilterBucket] = useState("")
@@ -149,6 +170,10 @@ export default function Transactions() {
         </div>
         <div className="flex gap-2">
           <button onClick={load} className="px-3 py-2 text-sm border border-slate-300 rounded-lg hover:bg-slate-50">Refresh</button>
+          <button onClick={findDupes} disabled={dupeLoading}
+            className="px-3 py-2 text-sm border border-amber-300 text-amber-700 rounded-lg hover:bg-amber-50 disabled:opacity-50">
+            {dupeLoading ? "Scanning..." : "Find Duplicates"}
+          </button>
           <button onClick={exportCSV} className="px-3 py-2 bg-slate-700 text-white text-sm rounded-lg hover:bg-slate-800">Export CSV</button>
         </div>
       </div>
@@ -183,6 +208,60 @@ export default function Transactions() {
           <option value={0}>All</option>
         </select>
       </div>
+
+      {/* Duplicate review panel */}
+      {dupeMode && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-5 mb-4">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h3 className="text-sm font-bold text-amber-800">Potential Same-Card Duplicates</h3>
+              <p className="text-xs text-amber-600 mt-0.5">Same amount, same card, within 10 days. Review each pair.</p>
+            </div>
+            <button onClick={() => setDupeMode(false)} className="text-xs text-amber-500 hover:text-amber-700">Close</button>
+          </div>
+          {dupes.length === 0 ? (
+            <p className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg p-3">No potential duplicates found.</p>
+          ) : (
+            <div className="space-y-3">
+              {dupes.map((d, i) => (
+                <div key={i} className="bg-white border border-amber-200 rounded-lg p-4">
+                  <div className="text-xs text-amber-600 font-medium mb-2">
+                    ···{d.account_mask} ({d.institution}) &middot; {fmt(d.amount)} &middot; {Math.round(Math.abs(
+                      (new Date(d.date1 + 'T00:00:00').getTime() - new Date(d.date2 + 'T00:00:00').getTime()) / 86400000
+                    ))} days apart
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    {/* Transaction 1 */}
+                    <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+                      <div className="font-semibold text-slate-800 text-sm">{d.merchant1 || d.desc1}</div>
+                      <div className="text-xs text-slate-500 mt-1">{d.date1} &middot; {d.bucket1 ?? 'unclassified'} &middot; {(d.status1 ?? '').replace(/_/g, ' ')}</div>
+                      <div className="flex gap-2 mt-2">
+                        <button onClick={() => discardDupe(d.id1)}
+                          className="px-2 py-1 bg-red-100 text-red-700 text-xs rounded hover:bg-red-200">Discard this one</button>
+                        <button onClick={() => { setDupeMode(false); setEditTxId(d.id1) }}
+                          className="px-2 py-1 bg-slate-100 text-slate-600 text-xs rounded hover:bg-slate-200">Edit</button>
+                      </div>
+                    </div>
+                    {/* Transaction 2 */}
+                    <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+                      <div className="font-semibold text-slate-800 text-sm">{d.merchant2 || d.desc2}</div>
+                      <div className="text-xs text-slate-500 mt-1">{d.date2} &middot; {d.bucket2 ?? 'unclassified'} &middot; {(d.status2 ?? '').replace(/_/g, ' ')}</div>
+                      <div className="flex gap-2 mt-2">
+                        <button onClick={() => discardDupe(d.id2)}
+                          className="px-2 py-1 bg-red-100 text-red-700 text-xs rounded hover:bg-red-200">Discard this one</button>
+                        <button onClick={() => { setDupeMode(false); setEditTxId(d.id2) }}
+                          className="px-2 py-1 bg-slate-100 text-slate-600 text-xs rounded hover:bg-slate-200">Edit</button>
+                      </div>
+                    </div>
+                  </div>
+                  <button onClick={() => setDupes(prev => prev.filter((_, idx) => idx !== i))}
+                    className="mt-2 text-xs text-slate-400 hover:text-slate-600">Keep both</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Table */}
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">

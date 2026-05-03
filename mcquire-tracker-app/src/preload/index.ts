@@ -34,6 +34,8 @@ contextBridge.exposeInMainWorld('api', {
     getAll:       (filters?: Record<string, any>)             => ipcRenderer.invoke('transactions:get-all', filters),
     split:        (parentId: string, fragments: any[])        => ipcRenderer.invoke('transactions:split', parentId, fragments),
     runRulesAll:  ()                                          => ipcRenderer.invoke('transactions:run-rules-all'),
+    findSameCardDupes: ()                                     => ipcRenderer.invoke('transactions:find-same-card-dupes'),
+    discardDuplicate:  (txId: string)                         => ipcRenderer.invoke('transactions:discard-duplicate', txId),
     getRecentNotes: (filters?: { category?: string; merchant?: string }) => ipcRenderer.invoke('transactions:get-recent-notes', filters),
   },
 

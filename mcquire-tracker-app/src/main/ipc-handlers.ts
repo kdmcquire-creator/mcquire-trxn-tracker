@@ -99,6 +99,49 @@ export function registerAppIpcHandlers(state: AppState): void {
     return { success: true, data: result }
   })
 
+  // ── Same-card potential duplicates ─────────────────────────────────────────
+
+  ipcMain.handle('transactions:find-same-card-dupes', () => {
+    const db = getDb()
+    if (!db) return { success: true, data: [] }
+    const dupes = db.prepare(`
+      SELECT t1.id as id1, t2.id as id2,
+             t1.merchant_name as merchant1, t2.merchant_name as merchant2,
+             t1.description_raw as desc1, t2.description_raw as desc2,
+             t1.amount, t1.account_id,
+             t1.transaction_date as date1, t2.transaction_date as date2,
+             t1.bucket as bucket1, t2.bucket as bucket2,
+             t1.review_status as status1, t2.review_status as status2,
+             a.account_mask, a.institution
+      FROM transactions t1
+      JOIN transactions t2
+        ON t1.account_id = t2.account_id
+        AND t1.amount = t2.amount
+        AND t1.id < t2.id
+        AND ABS(julianday(t1.transaction_date) - julianday(t2.transaction_date)) <= 10
+        AND ABS(julianday(t1.transaction_date) - julianday(t2.transaction_date)) > 0
+      JOIN accounts a ON a.id = t1.account_id
+      WHERE t1.bucket != 'Exclude' AND t2.bucket != 'Exclude'
+        AND t1.is_split_child = 0 AND t2.is_split_child = 0
+        AND NOT EXISTS (SELECT 1 FROM transactions c WHERE c.split_parent_id = t1.id)
+        AND NOT EXISTS (SELECT 1 FROM transactions c WHERE c.split_parent_id = t2.id)
+      ORDER BY t1.transaction_date DESC
+      LIMIT 200
+    `).all()
+    return { success: true, data: dupes }
+  })
+
+  ipcMain.handle('transactions:discard-duplicate', (_event: Electron.IpcMainInvokeEvent, txId: string) => {
+    const db = getDb()
+    if (!db) return { success: false, error: 'DB not initialized' }
+    db.prepare(`
+      UPDATE transactions SET bucket = 'Exclude', review_status = 'auto_classified',
+        flag_reason = 'Discarded as same-card duplicate by user', updated_at = datetime('now')
+      WHERE id = ?
+    `).run(txId)
+    return { success: true }
+  })
+
   // ── Transaction read/write ─────────────────────────────────────────────────
 
   ipcMain.handle('transactions:get-pending', () => {
@@ -339,13 +382,13 @@ export function registerAppIpcHandlers(state: AppState): void {
 
   // ── Shell: open file in Explorer ───────────────────────────────────────────
 
-  ipcMain.handle('shell:open-path', (_event: Electron.IpcMainInvokeEvent, filePath: string) => {
+  ipcMain.handle('shell:open-path', async (_event: Electron.IpcMainInvokeEvent, filePath: string) => {
     const syncFolder = getSyncFolder()
     const resolved = path.resolve(filePath)
     if (syncFolder && !resolved.startsWith(path.resolve(syncFolder))) {
       return { success: false, error: 'Path outside sync folder' }
     }
-    shell.showItemInFolder(resolved)
+    await shell.openPath(resolved)
     return { success: true }
   })
 
