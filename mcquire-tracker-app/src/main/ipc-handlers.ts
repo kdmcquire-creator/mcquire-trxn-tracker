@@ -154,11 +154,22 @@ export function registerAppIpcHandlers(state: AppState): void {
   ipcMain.handle('transactions:discard-duplicate', (_event: Electron.IpcMainInvokeEvent, txId: string) => {
     const db = getDb()
     if (!db) return { success: false, error: 'DB not initialized' }
+
+    // Get details of the ghost for the learning log
+    const ghost = db.prepare(`
+      SELECT t.transaction_date, t.amount, t.merchant_name, a.account_mask
+      FROM transactions t JOIN accounts a ON a.id = t.account_id WHERE t.id = ?
+    `).get(txId) as { transaction_date: string; amount: number; merchant_name: string; account_mask: string } | undefined
+
+    const detail = ghost ? `Ghost: ${ghost.transaction_date} ···${ghost.account_mask} $${Math.abs(ghost.amount).toFixed(2)} "${ghost.merchant_name}"` : ''
+
     db.prepare(`
       UPDATE transactions SET bucket = 'Exclude', review_status = 'auto_classified',
-        flag_reason = 'Discarded as same-card duplicate by user', updated_at = datetime('now')
+        flag_reason = ?, updated_at = datetime('now')
       WHERE id = ?
-    `).run(txId)
+    `).run(`Discarded as ghost/duplicate by user. ${detail}`, txId)
+
+    console.log(`[DupeLearn] Ghost discarded: ${detail}`)
     return { success: true }
   })
 

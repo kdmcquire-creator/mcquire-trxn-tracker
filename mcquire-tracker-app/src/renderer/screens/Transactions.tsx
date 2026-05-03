@@ -53,10 +53,15 @@ export default function Transactions() {
     } catch {} finally { setDupeLoading(false) }
   }, [])
 
-  const discardDupe = useCallback(async (txId: string) => {
-    await window.api.transactions.discardDuplicate(txId)
-    setDupes(prev => prev.filter(d => d.id1 !== txId && d.id2 !== txId))
-    setRows(prev => prev.filter(r => r.id !== txId))
+  const discardDupe = useCallback(async (discardId: string, keepId: string) => {
+    await window.api.transactions.discardDuplicate(discardId)
+    // Tag the kept transaction so Ollama learns which one is typically valid
+    await window.api.transactions.classify(keepId, {
+      description_notes: undefined, // don't overwrite existing notes
+      flag_reason: `Confirmed valid (ghost discarded: ${discardId.slice(0, 8)})`,
+    }).catch(() => {})
+    setDupes(prev => prev.filter(d => d.id1 !== discardId && d.id2 !== discardId))
+    setRows(prev => prev.filter(r => r.id !== discardId))
   }, [])
 
   // Filters
@@ -251,8 +256,8 @@ export default function Transactions() {
                         <div className="font-semibold text-slate-800 text-sm">{d.merchant1 || d.desc1}</div>
                         <div className="text-xs text-slate-500 mt-1">{d.date1} &middot; {d.bucket1 ?? 'unclassified'}</div>
                         <div className="flex gap-2 mt-2">
-                          <button onClick={() => discardDupe(d.id1)}
-                            className="px-2 py-1 bg-red-100 text-red-700 text-xs rounded hover:bg-red-200">Discard</button>
+                          <button onClick={() => discardDupe(d.id1, d.id2)}
+                            className="px-2 py-1 bg-red-100 text-red-700 text-xs rounded hover:bg-red-200">This is the ghost</button>
                           <button onClick={() => { setDupeMode(false); setEditTxId(d.id1) }}
                             className="px-2 py-1 bg-slate-100 text-slate-600 text-xs rounded hover:bg-slate-200">Edit</button>
                         </div>
@@ -261,8 +266,8 @@ export default function Transactions() {
                         <div className="font-semibold text-slate-800 text-sm">{d.merchant2 || d.desc2}</div>
                         <div className="text-xs text-slate-500 mt-1">{d.date2} &middot; {d.bucket2 ?? 'unclassified'}</div>
                         <div className="flex gap-2 mt-2">
-                          <button onClick={() => discardDupe(d.id2)}
-                            className="px-2 py-1 bg-red-100 text-red-700 text-xs rounded hover:bg-red-200">Discard</button>
+                          <button onClick={() => discardDupe(d.id2, d.id1)}
+                            className="px-2 py-1 bg-red-100 text-red-700 text-xs rounded hover:bg-red-200">This is the ghost</button>
                           <button onClick={() => { setDupeMode(false); setEditTxId(d.id2) }}
                             className="px-2 py-1 bg-slate-100 text-slate-600 text-xs rounded hover:bg-slate-200">Edit</button>
                         </div>
