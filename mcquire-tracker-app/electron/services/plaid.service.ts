@@ -438,7 +438,7 @@ export class PlaidService {
          WHERE t.account_id != ?
            AND t.merchant_name = ?
            AND t.amount = ?
-           AND ABS(julianday(t.transaction_date) - julianday(?)) <= 1
+           AND ABS(julianday(t.transaction_date) - julianday(?)) <= 2
            AND t.bucket != 'Exclude'`
       )
       .get(accountId, merchantNorm, amount, date) as { n: number }
