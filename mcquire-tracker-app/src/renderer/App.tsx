@@ -214,8 +214,10 @@ declare global {
       }
       reports: {
         generateExpenseReport: (payload: any) => Promise<any>
-        checkExpenseReportReadiness: () => Promise<any>
+        checkExpenseReportReadiness: (payload?: any) => Promise<any>
         getBlockerTransactions: (payload?: { dateFrom?: string; dateTo?: string }) => Promise<any>
+        checkOverlap: (payload: { dateFrom: string; dateTo: string }) => Promise<any>
+        confirmSubmitted: (reportId: string) => Promise<any>
       }
       plaid: any
       accounts: any

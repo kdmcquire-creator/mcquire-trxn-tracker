@@ -150,16 +150,68 @@ export function registerFinancialStatementsHandlers(
     }
   })
 
-  ipcMain.handle('reports:generate-expense-report', async (_event, payload: { dateFrom: string; dateTo: string; periodLabel?: string }) => {
+  // Check for overlapping prior reports in the date range
+  ipcMain.handle('reports:check-overlap', (_event, payload: { dateFrom: string; dateTo: string }) => {
     try {
-      const { dateFrom, dateTo, periodLabel } = payload
+      const { dateFrom, dateTo } = payload
+      const priorReports = db.prepare(`
+        SELECT er.id, er.report_period, er.date_generated, er.status, er.total_amount, er.transaction_count
+        FROM expense_reports er
+        WHERE er.status = 'draft'
+          AND er.notes IS NOT NULL
+      `).all() as Array<{
+        id: string; report_period: string; date_generated: string;
+        status: string; total_amount: number; transaction_count: number
+      }>
+
+      // Check which drafts overlap with the requested date range
+      const overlapping = priorReports.filter(r => {
+        try {
+          const notes = JSON.parse(db.prepare("SELECT notes FROM expense_reports WHERE id = ?").get(r.id)?.notes ?? '{}')
+          return notes.dateFrom && notes.dateTo &&
+            notes.dateFrom <= dateTo && notes.dateTo >= dateFrom
+        } catch { return false }
+      })
+
+      return { success: true, data: { hasOverlap: overlapping.length > 0, reports: overlapping } }
+    } catch (err: any) {
+      return { success: false, error: err.message }
+    }
+  })
+
+  // Confirm a prior report was submitted — tags its transactions
+  ipcMain.handle('reports:confirm-submitted', (_event, reportId: string) => {
+    try {
+      const report = db.prepare("SELECT id, notes FROM expense_reports WHERE id = ?").get(reportId) as { id: string; notes: string } | undefined
+      if (!report) return { success: false, error: 'Report not found' }
+
+      const notesData = JSON.parse(report.notes ?? '{}')
+      const txIds: string[] = notesData.txIds ?? []
+
+      db.prepare("UPDATE expense_reports SET status = 'submitted' WHERE id = ?").run(reportId)
+
+      if (txIds.length > 0) {
+        const upd = db.prepare("UPDATE transactions SET expense_report_id = ? WHERE id = ?")
+        db.transaction(() => txIds.forEach(id => upd.run(reportId, id)))()
+      }
+
+      console.log(`[Reports] Marked report ${reportId} as submitted, tagged ${txIds.length} transactions`)
+      return { success: true, data: { tagged: txIds.length } }
+    } catch (err: any) {
+      return { success: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('reports:generate-expense-report', async (_event, payload: { dateFrom: string; dateTo: string; periodLabel?: string; includeAlreadyReported?: boolean }) => {
+    try {
+      const { dateFrom, dateTo, periodLabel, includeAlreadyReported } = payload
       const label = periodLabel ?? `${dateFrom} – ${dateTo}`
       const exportDir = path.join(getSyncFolder(), 'exports', 'expense_reports')
       fs.mkdirSync(exportDir, { recursive: true })
       const ts = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19)
       const outputPath = path.join(exportDir, `Peak10_ExpenseReport_${ts}.xlsx`)
-      const result = await generatePeak10ExpenseReport(db, dateFrom, dateTo, label, outputPath)
-      return { success: true, data: { filePath: result.file_path, total: result.total, count: result.count } }
+      const result = await generatePeak10ExpenseReport(db, dateFrom, dateTo, label, outputPath, { includeAlreadyReported })
+      return { success: true, data: { filePath: result.file_path, total: result.total, count: result.count, reportId: result.report_id } }
     } catch (err: any) {
       return { success: false, error: err.message }
     }

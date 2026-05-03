@@ -37,11 +37,17 @@ export async function generatePeak10ExpenseReport(
   dateFrom: string,
   dateTo: string,
   periodLabel: string,
-  outputPath: string
-): Promise<{ file_path: string; total: number; count: number }> {
+  outputPath: string,
+  options?: { includeAlreadyReported?: boolean }
+): Promise<{ file_path: string; total: number; count: number; report_id: string }> {
 
   const alreadyReimbursedThrough = db.prepare("SELECT value FROM settings WHERE key='peak10_already_reimbursed_through'").get() as { value: string } | undefined
   const cutoff = alreadyReimbursedThrough?.value ?? '2025-11-30'
+
+  // If includeAlreadyReported, don't filter on expense_report_id (re-draft mode)
+  const reportFilter = options?.includeAlreadyReported
+    ? ''
+    : 'AND t.expense_report_id IS NULL'
 
   const txs = db.prepare(`
     SELECT t.*, a.account_name, a.account_mask, a.institution
@@ -51,7 +57,7 @@ export async function generatePeak10ExpenseReport(
       AND t.transaction_date <= ?
       AND t.transaction_date > ?
       AND t.review_status IN ('auto_classified','manually_classified')
-      AND t.expense_report_id IS NULL
+      ${reportFilter}
       AND NOT EXISTS (SELECT 1 FROM transactions _sp WHERE _sp.split_parent_id = t.id)
     ORDER BY t.transaction_date ASC
   `).all(dateFrom, dateTo, cutoff) as Transaction[]
@@ -135,14 +141,16 @@ export async function generatePeak10ExpenseReport(
 
   await wb.xlsx.writeFile(outputPath)
 
-  // Mark transactions as included in this report
+  // Record the report as a draft — don't tag transactions yet.
+  // Transactions only get tagged when the user confirms submission.
   const reportId = require('uuid').v4()
-  db.prepare("INSERT INTO expense_reports (id, report_period, date_generated, file_path, status, total_amount, transaction_count) VALUES (?,?,datetime('now'),?,'draft',?,?)")
-    .run(reportId, periodLabel, outputPath, total, txs.length)
-  const upd = db.prepare("UPDATE transactions SET expense_report_id = ? WHERE id = ?")
-  db.transaction(() => txs.forEach(tx => upd.run(reportId, tx.id)))()
+  db.prepare(`INSERT INTO expense_reports
+    (id, report_period, date_generated, file_path, status, total_amount, transaction_count, notes)
+    VALUES (?,?,datetime('now'),?,'draft',?,?,?)`)
+    .run(reportId, periodLabel, outputPath, total, txs.length,
+      JSON.stringify({ dateFrom, dateTo, txIds: txs.map(t => t.id) }))
 
-  return { file_path: outputPath, total, count: txs.length }
+  return { file_path: outputPath, total, count: txs.length, report_id: reportId }
 }
 
 // ── Full Tracker Export (9-tab workbook) ──────────────────────────────

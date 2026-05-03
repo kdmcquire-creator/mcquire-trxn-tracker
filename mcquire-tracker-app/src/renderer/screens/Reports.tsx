@@ -184,13 +184,29 @@ export default function Reports() {
 
   // (save logic is in saveBlockerNote above)
 
-  const generate = async () => {
+  // Overlap check state
+  const [overlapDialog, setOverlapDialog] = useState<{ reports: any[] } | null>(null)
+
+  const generate = async (overrideIncludeAll?: boolean) => {
     if (!selectedReport) return
+
+    // For expense reports, check for overlapping prior drafts first
+    if (selectedReport === "expense_report" && overrideIncludeAll === undefined) {
+      try {
+        const overlapResult = await window.api.reports.checkOverlap({ dateFrom, dateTo })
+        const data = unwrap<any>(overlapResult, null)
+        if (data?.hasOverlap && data.reports?.length > 0) {
+          setOverlapDialog({ reports: data.reports })
+          return
+        }
+      } catch {}
+    }
+
     setGenerating(true)
     setError(null)
     try {
       let result: any
-      const payload = { dateFrom, dateTo, periodLabel }
+      const payload = { dateFrom, dateTo, periodLabel, includeAlreadyReported: overrideIncludeAll === true }
 
       switch (selectedReport) {
         case "expense_report":
@@ -544,6 +560,58 @@ export default function Reports() {
                 <button onClick={() => setEditingBlocker(null)}
                   className="px-4 py-2.5 border border-slate-300 rounded-lg text-sm hover:bg-slate-50">Cancel</button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Overlap Confirmation Dialog ────────────────────────────────────── */}
+      {overlapDialog && (
+        <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+            <div className="px-6 py-4 border-b border-slate-200">
+              <h2 className="text-lg font-bold text-slate-800">Prior Report Found</h2>
+            </div>
+            <div className="px-6 py-5 space-y-4">
+              <p className="text-sm text-slate-600">
+                A previously generated expense report overlaps with this date range:
+              </p>
+              {overlapDialog.reports.map((r: any) => (
+                <div key={r.id} className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-sm">
+                  <div className="font-semibold text-slate-800">{r.report_period}</div>
+                  <div className="text-slate-500 text-xs mt-1">
+                    Generated {new Date(r.date_generated).toLocaleDateString()} &middot; {r.transaction_count} transactions &middot; ${r.total_amount?.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                  </div>
+                </div>
+              ))}
+              <p className="text-sm font-medium text-slate-700">
+                Did you submit this expense report?
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={async () => {
+                    // YES: mark prior reports as submitted, then generate with only new txns
+                    for (const r of overlapDialog.reports) {
+                      await window.api.reports.confirmSubmitted(r.id)
+                    }
+                    setOverlapDialog(null)
+                    generate(false) // generate with only unsubmitted txns
+                  }}
+                  className="flex-1 py-2.5 bg-green-600 text-white rounded-lg text-sm font-semibold hover:bg-green-700">
+                  Yes, submitted
+                </button>
+                <button
+                  onClick={() => {
+                    // NO: re-draft — include all txns in range
+                    setOverlapDialog(null)
+                    generate(true) // include already-reported txns
+                  }}
+                  className="flex-1 py-2.5 bg-slate-600 text-white rounded-lg text-sm font-semibold hover:bg-slate-700">
+                  No, re-draft
+                </button>
+              </div>
+              <button onClick={() => setOverlapDialog(null)}
+                className="w-full text-center text-xs text-slate-400 hover:text-slate-600">Cancel</button>
             </div>
           </div>
         </div>
