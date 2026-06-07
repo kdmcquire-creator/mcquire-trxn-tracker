@@ -6,6 +6,7 @@ import * as fs from 'fs'
 import { createHash } from 'crypto'
 import { initSqlJsDatabase, type CompatDb } from '../../electron/services/database'
 import { normalizeMerchant } from '../../electron/services/classification-engine'
+import { restoreRecurringExclusions, recurringMerchantVerdict } from '../../electron/services/recurring-repair'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Database initialization
@@ -641,6 +642,32 @@ function runMigrations(database: CompatDb): void {
     }
 
     database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('013-diagnose-missing-recurring')
+  }
+
+  // Migration 014: comprehensive, self-healing recurring-charge repair.
+  //
+  // Restores ANY transaction that was excluded by a dedup path (import-time OR
+  // a migration) but is actually a recurring charge — defined as the same
+  // (merchant_name, amount) appearing in 3+ DISTINCT calendar months anywhere in
+  // the data. A genuine one-off double charge never meets this bar; rent,
+  // subscriptions and utilities always do. This is independent of which code
+  // path did the excluding, so it fixes Bilt, Gexa, etc. in one pass.
+  if (!applied('014-restore-recurring-dedup')) {
+    const restored = restoreRecurringExclusions(database)
+    console.log(restored > 0
+      ? `[Migration 014] Restored ${restored} recurring charges wrongly excluded by dedup`
+      : '[Migration 014] No wrongly-excluded recurring charges found')
+
+    // ── Definitive verdict for commonly-recurring merchants ──────────────────
+    // If a merchant you expect monthly shows only 1-2 distinct months here, those
+    // months were never imported (a data-source gap) — not a dedup problem.
+    const watch = ['bilt', 'gexa', 'nickson', 'lifetime', 'patriot', 'google one', 'microsoft', 'adobe']
+    for (const v of recurringMerchantVerdict(database, watch)) {
+      console.log(`[Migration 014][verdict] "${v.merchant}": ${v.total} rows across ${v.months} month(s) ` +
+        `(${v.excluded} excluded) range ${v.firstDate}..${v.lastDate}`)
+    }
+
+    database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('014-restore-recurring-dedup')
   }
 }
 

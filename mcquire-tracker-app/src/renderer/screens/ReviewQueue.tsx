@@ -7,14 +7,6 @@ function unwrap<T>(res: any, fallback: T): T {
   return (res as T) ?? fallback
 }
 
-const bucketBadge: Record<string, string> = {
-  "Peak 10": "bg-blue-100 text-blue-800",
-  "Moonsmoke LLC": "bg-green-100 text-green-800",
-  "Watersound Investments LLC": "bg-purple-100 text-purple-800",
-  Personal: "bg-gray-100 text-gray-700",
-  Exclude: "bg-red-100 text-red-700",
-}
-
 const fmt = (n: number) =>
   `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 

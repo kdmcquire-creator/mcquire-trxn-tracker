@@ -312,7 +312,7 @@ export function validateExpenseReportReadiness(db: CompatDb, dateFrom: string, d
 // ── IRS Form 1120-S & Schedule K-1 Export ──────────────────────────────
 // Maps Moonsmoke LLC expense categories to IRS line items
 
-interface ScorpInputs {
+export interface ScorpInputs {
   taxYear: string
   grossReceipts: number
   officerCompensation: number
@@ -322,7 +322,7 @@ interface ScorpInputs {
   endingCash: number
 }
 
-const LLC_TO_1120S: Record<string, { line: string; label: string }> = {
+export const LLC_TO_1120S: Record<string, { line: string; label: string }> = {
   'Rent - Business Lodging':       { line: '11', label: 'Rents' },
   'Lodging - Business Housing':    { line: '11', label: 'Rents' },
   'Utilities - Home Office':       { line: '19', label: 'Other deductions — Utilities' },
@@ -340,16 +340,27 @@ const LLC_TO_1120S: Record<string, { line: string; label: string }> = {
   'Business Expenses - Other':     { line: '19', label: 'Other deductions — Other' },
 }
 
-export async function generate1120SWorkbook(
-  db: CompatDb,
-  inputs: ScorpInputs,
-  outputPath: string
-): Promise<{ file_path: string }> {
+export interface Scorp1120SResult {
+  lineTotals: Record<string, { label: string; amount: number; categories: string[] }>
+  totalDeductions: number
+  ordinaryIncome: number
+  officerComp: number
+  mealsFull: number
+  mealsDeductible: number
+  detailCount: number
+}
+
+/**
+ * Pure computation of all 1120-S figures from Moonsmoke LLC transactions.
+ * Separated from rendering so the tax math is unit-tested.
+ * Note: meals are mapped to Line 19 at full value here; the 50%-deductible
+ * figure is reported separately (mealsDeductible) for the preparer.
+ */
+export function compute1120S(db: CompatDb, inputs: ScorpInputs): Scorp1120SResult {
   const year = inputs.taxYear
   const dateFrom = `${year}-01-01`
   const dateTo = `${year}-12-31`
 
-  // Pull all Moonsmoke LLC transactions for the tax year
   const txs = db.prepare(`
     SELECT t.llc_category, SUM(ABS(t.amount)) as total, COUNT(*) as cnt
     FROM transactions t
@@ -361,7 +372,43 @@ export async function generate1120SWorkbook(
     ORDER BY t.llc_category
   `).all(dateFrom, dateTo) as Array<{ llc_category: string; total: number; cnt: number }>
 
-  // Also pull detail rows for the statement attachment
+  const lineTotals: Record<string, { label: string; amount: number; categories: string[] }> = {}
+  let detailCount = 0
+  let mealsFull = 0
+  for (const tx of txs) {
+    detailCount += tx.cnt
+    if (tx.llc_category === 'Meals & Entertainment') mealsFull += tx.total
+    const mapping = LLC_TO_1120S[tx.llc_category] ?? { line: '19', label: `Other deductions — ${tx.llc_category}` }
+    if (!lineTotals[mapping.line]) lineTotals[mapping.line] = { label: mapping.label, amount: 0, categories: [] }
+    lineTotals[mapping.line].amount += tx.total
+    if (!lineTotals[mapping.line].categories.includes(tx.llc_category)) {
+      lineTotals[mapping.line].categories.push(tx.llc_category)
+    }
+  }
+
+  const totalDeductions = Object.values(lineTotals).reduce((s, l) => s + l.amount, 0)
+  const ordinaryIncome = inputs.grossReceipts + inputs.otherIncome - totalDeductions
+  const officerComp = inputs.officerCompensation || (lineTotals['7']?.amount ?? 0)
+
+  return {
+    lineTotals, totalDeductions, ordinaryIncome, officerComp,
+    mealsFull, mealsDeductible: mealsFull * 0.5, detailCount,
+  }
+}
+
+export async function generate1120SWorkbook(
+  db: CompatDb,
+  inputs: ScorpInputs,
+  outputPath: string
+): Promise<{ file_path: string }> {
+  const year = inputs.taxYear
+  const dateFrom = `${year}-01-01`
+  const dateTo = `${year}-12-31`
+
+  const computed = compute1120S(db, inputs)
+  const { lineTotals, totalDeductions, ordinaryIncome } = computed
+
+  // Pull detail rows for the statement attachment
   const detailTxs = db.prepare(`
     SELECT t.transaction_date, t.merchant_name, t.description_raw, t.llc_category,
            t.amount, t.description_notes, a.account_mask
@@ -377,21 +424,16 @@ export async function generate1120SWorkbook(
     llc_category: string; amount: number; description_notes: string; account_mask: string
   }>
 
-  // Build line-item totals
-  const lineTotals: Record<string, { label: string; amount: number; categories: string[] }> = {}
-  for (const tx of txs) {
-    const mapping = LLC_TO_1120S[tx.llc_category] ?? { line: '19', label: `Other deductions — ${tx.llc_category}` }
-    if (!lineTotals[mapping.line]) {
-      lineTotals[mapping.line] = { label: mapping.label, amount: 0, categories: [] }
-    }
-    lineTotals[mapping.line].amount += tx.total
-    if (!lineTotals[mapping.line].categories.includes(tx.llc_category)) {
-      lineTotals[mapping.line].categories.push(tx.llc_category)
-    }
-  }
-
-  const totalDeductions = Object.values(lineTotals).reduce((s, l) => s + l.amount, 0)
-  const ordinaryIncome = inputs.grossReceipts + inputs.otherIncome - totalDeductions
+  // Re-derive the per-category rows for rendering line 19 itemization
+  const txs = db.prepare(`
+    SELECT t.llc_category, SUM(ABS(t.amount)) as total, COUNT(*) as cnt
+    FROM transactions t
+    WHERE t.bucket = 'Moonsmoke LLC'
+      AND t.transaction_date >= ? AND t.transaction_date <= ?
+      AND t.review_status IN ('auto_classified', 'manually_classified')
+      AND NOT EXISTS (SELECT 1 FROM transactions c WHERE c.split_parent_id = t.id)
+    GROUP BY t.llc_category ORDER BY t.llc_category
+  `).all(dateFrom, dateTo) as Array<{ llc_category: string; total: number; cnt: number }>
 
   const wb = new ExcelJS.Workbook()
   wb.creator = 'McQuire Tracker'

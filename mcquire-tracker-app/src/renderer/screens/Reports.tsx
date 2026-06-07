@@ -488,7 +488,7 @@ export default function Reports() {
 
           {/* Generate button */}
           <button
-            onClick={generate}
+            onClick={() => generate()}
             disabled={generating || (selectedReport === "expense_report" && !!readiness?.blockers?.length)}
             className="w-full py-3 bg-slate-800 text-white rounded-lg font-medium hover:bg-slate-900 disabled:opacity-50 transition-colors"
           >
