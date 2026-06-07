@@ -604,6 +604,44 @@ function runMigrations(database: CompatDb): void {
 
     database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('012-restore-false-positive-dedup')
   }
+
+  // Migration 013: diagnostic — log all Bilt/recurring merchant transactions
+  // regardless of status to find where they went
+  if (!applied('013-diagnose-missing-recurring')) {
+    const allBilt = database.prepare(`
+      SELECT id, transaction_date, amount, bucket, review_status, flag_reason, merchant_name
+      FROM transactions
+      WHERE merchant_name LIKE '%bilt%' OR description_raw LIKE '%bilt%'
+      ORDER BY transaction_date
+    `).all() as Array<any>
+    console.log(`[Migration 013] Found ${allBilt.length} Bilt transactions total:`)
+    for (const t of allBilt) {
+      console.log(`  ${t.transaction_date} $${Math.abs(t.amount).toFixed(2)} bucket=${t.bucket} status=${t.review_status} flag="${t.flag_reason ?? ''}"`)
+    }
+
+    // Also check if they exist as Excluded with other flag reasons
+    const excludedBilt = database.prepare(`
+      SELECT COUNT(*) as n FROM transactions
+      WHERE (merchant_name LIKE '%bilt%' OR description_raw LIKE '%bilt%')
+        AND bucket = 'Exclude'
+    `).get() as { n: number }
+    console.log(`[Migration 013] Of those, ${excludedBilt.n} are Excluded`)
+
+    // Restore ANY excluded Bilt that wasn't a genuine cross-account dupe
+    const restored = database.prepare(`
+      UPDATE transactions
+      SET bucket = NULL, review_status = 'pending_review',
+          flag_reason = 'Restored (migration 013)',
+          updated_at = datetime('now')
+      WHERE (merchant_name LIKE '%bilt%' OR description_raw LIKE '%bilt%')
+        AND bucket = 'Exclude'
+    `).run()
+    if (restored.changes > 0) {
+      console.log(`[Migration 013] Restored ${restored.changes} excluded Bilt transactions`)
+    }
+
+    database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('013-diagnose-missing-recurring')
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
