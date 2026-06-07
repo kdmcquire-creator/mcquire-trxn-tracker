@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "check": "tsc --noEmit && vitest run",
     "preview": "electron-vite preview"
   },
   "dependencies": {

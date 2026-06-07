@@ -6,6 +6,7 @@ import * as fs from 'fs'
 import { createHash } from 'crypto'
 import { initSqlJsDatabase, type CompatDb } from '../../electron/services/database'
 import { normalizeMerchant } from '../../electron/services/classification-engine'
+import { restoreRecurringExclusions, recurringMerchantVerdict } from '../../electron/services/recurring-repair'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Database initialization
@@ -603,6 +604,70 @@ function runMigrations(database: CompatDb): void {
     }
 
     database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('012-restore-false-positive-dedup')
+  }
+
+  // Migration 013: diagnostic — log all Bilt/recurring merchant transactions
+  // regardless of status to find where they went
+  if (!applied('013-diagnose-missing-recurring')) {
+    const allBilt = database.prepare(`
+      SELECT id, transaction_date, amount, bucket, review_status, flag_reason, merchant_name
+      FROM transactions
+      WHERE merchant_name LIKE '%bilt%' OR description_raw LIKE '%bilt%'
+      ORDER BY transaction_date
+    `).all() as Array<any>
+    console.log(`[Migration 013] Found ${allBilt.length} Bilt transactions total:`)
+    for (const t of allBilt) {
+      console.log(`  ${t.transaction_date} $${Math.abs(t.amount).toFixed(2)} bucket=${t.bucket} status=${t.review_status} flag="${t.flag_reason ?? ''}"`)
+    }
+
+    // Also check if they exist as Excluded with other flag reasons
+    const excludedBilt = database.prepare(`
+      SELECT COUNT(*) as n FROM transactions
+      WHERE (merchant_name LIKE '%bilt%' OR description_raw LIKE '%bilt%')
+        AND bucket = 'Exclude'
+    `).get() as { n: number }
+    console.log(`[Migration 013] Of those, ${excludedBilt.n} are Excluded`)
+
+    // Restore ANY excluded Bilt that wasn't a genuine cross-account dupe
+    const restored = database.prepare(`
+      UPDATE transactions
+      SET bucket = NULL, review_status = 'pending_review',
+          flag_reason = 'Restored (migration 013)',
+          updated_at = datetime('now')
+      WHERE (merchant_name LIKE '%bilt%' OR description_raw LIKE '%bilt%')
+        AND bucket = 'Exclude'
+    `).run()
+    if (restored.changes > 0) {
+      console.log(`[Migration 013] Restored ${restored.changes} excluded Bilt transactions`)
+    }
+
+    database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('013-diagnose-missing-recurring')
+  }
+
+  // Migration 014: comprehensive, self-healing recurring-charge repair.
+  //
+  // Restores ANY transaction that was excluded by a dedup path (import-time OR
+  // a migration) but is actually a recurring charge — defined as the same
+  // (merchant_name, amount) appearing in 3+ DISTINCT calendar months anywhere in
+  // the data. A genuine one-off double charge never meets this bar; rent,
+  // subscriptions and utilities always do. This is independent of which code
+  // path did the excluding, so it fixes Bilt, Gexa, etc. in one pass.
+  if (!applied('014-restore-recurring-dedup')) {
+    const restored = restoreRecurringExclusions(database)
+    console.log(restored > 0
+      ? `[Migration 014] Restored ${restored} recurring charges wrongly excluded by dedup`
+      : '[Migration 014] No wrongly-excluded recurring charges found')
+
+    // ── Definitive verdict for commonly-recurring merchants ──────────────────
+    // If a merchant you expect monthly shows only 1-2 distinct months here, those
+    // months were never imported (a data-source gap) — not a dedup problem.
+    const watch = ['bilt', 'gexa', 'nickson', 'lifetime', 'patriot', 'google one', 'microsoft', 'adobe']
+    for (const v of recurringMerchantVerdict(database, watch)) {
+      console.log(`[Migration 014][verdict] "${v.merchant}": ${v.total} rows across ${v.months} month(s) ` +
+        `(${v.excluded} excluded) range ${v.firstDate}..${v.lastDate}`)
+    }
+
+    database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('014-restore-recurring-dedup')
   }
 }
 

@@ -18,6 +18,7 @@ import * as path from 'path'
 import * as fs from 'fs'
 import type { SyncResult } from '../../src/shared/plaid.types'
 import { classifyTransaction, loadActiveRules, normalizeMerchant, hashRow } from './classification-engine'
+import { isCrossAccountDuplicate } from './dedup'
 import type { Rule } from '../../src/shared/types'
 
 // ─── Credential helpers (Windows Credential Manager via safeStorage) ───────────
@@ -430,33 +431,8 @@ export class PlaidService {
     date: string,
     accountId: string
   ): boolean {
-    // Allow ±2 day tolerance to catch pending vs posted date offsets
-    // (e.g., card 9007 shows pending on day N, card 2419 posts on day N+1 or N+2)
-
-    // First: check if this merchant+amount is a recurring charge on the OTHER account.
-    // If it appears 3+ times on that account, it's a subscription/recurring — not a duplicate.
-    const recurringCheck = this.db
-      .prepare(
-        `SELECT COUNT(*) as n FROM transactions t
-         WHERE t.account_id != ?
-           AND t.merchant_name = ?
-           AND t.amount = ?
-           AND t.bucket != 'Exclude'`
-      )
-      .get(accountId, merchantNorm, amount) as { n: number }
-    if (recurringCheck.n >= 3) return false
-
-    const matches = this.db
-      .prepare(
-        `SELECT COUNT(*) as n FROM transactions t
-         WHERE t.account_id != ?
-           AND t.merchant_name = ?
-           AND t.amount = ?
-           AND ABS(julianday(t.transaction_date) - julianday(?)) <= 2
-           AND t.bucket != 'Exclude'`
-      )
-      .get(accountId, merchantNorm, amount, date) as { n: number }
-    return matches.n >= 1
+    // Delegates to the shared, unit-tested dedup module (see electron/services/dedup.ts).
+    return isCrossAccountDuplicate(this.db, { merchantNorm, amount, date, accountId })
   }
 
   private importPlaidTransaction(tx: any, _plaidItemId: string): 'new' | 'duplicate' | 'queued' {

@@ -16,6 +16,7 @@ import type { CompatDb } from './database'
 import { v4 as uuidv4 } from 'uuid'
 import { ipcMain, dialog } from 'electron'
 import { normalizeMerchant, hashRow, classifyTransaction, loadActiveRules } from './classification-engine'
+import { isCrossAccountDuplicate } from './dedup'
 
 // ─── Monarch CSV column mapping ───────────────────────────────────────────────
 // Monarch export columns: Date, Merchant, Category, Account, Original Statement,
@@ -278,31 +279,17 @@ export class HistoricalImportService {
           continue
         }
 
-        // Cross-account dedup: same merchant + amount + date (±2 days) on a different account
-        // means this charge already exists (e.g., DoorDash appearing on two cards).
-        // Skip dedup for recurring charges (3+ of same merchant+amount on the other account).
+        // Cross-account dedup via the shared, unit-tested module (electron/services/dedup.ts).
+        // Skips recurring charges (rent, subscriptions) automatically.
         const merchantNorm = normalizeMerchant(
           row['Merchant'] || row['Original Statement'] || row['Description'] || ''
         )
         const txDate = this.normalizeDate(row[dateCol] || '')
         const txAmount = this.parseAmount(row[amountCol] || '0')
-        const recurringCheck = this.db
-          .prepare(
-            `SELECT COUNT(*) as n FROM transactions
-             WHERE account_id != ? AND merchant_name = ? AND amount = ? AND bucket != 'Exclude'`
-          )
-          .get(accountId, merchantNorm, txAmount) as { n: number }
-        const crossAcct = recurringCheck.n >= 3 ? { n: 0 } : this.db
-          .prepare(
-            `SELECT COUNT(*) as n FROM transactions
-             WHERE account_id != ?
-               AND merchant_name = ?
-               AND amount = ?
-               AND ABS(julianday(transaction_date) - julianday(?)) <= 2
-               AND bucket != 'Exclude'`
-          )
-          .get(accountId, merchantNorm, txAmount, txDate) as { n: number }
-        if (crossAcct.n >= 1) {
+        const isDupe = isCrossAccountDuplicate(this.db, {
+          merchantNorm, amount: txAmount, date: txDate, accountId,
+        })
+        if (isDupe) {
           // Insert as Exclude so the hash is recorded and we don't re-process
           this.db.prepare(
             `INSERT OR IGNORE INTO transactions
