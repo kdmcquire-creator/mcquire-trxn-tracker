@@ -236,7 +236,7 @@ export function registerAppIpcHandlers(state: AppState): void {
     if (filters.startDate) { sql += ' AND t.transaction_date >= ?'; params.push(filters.startDate) }
     if (filters.endDate) { sql += ' AND t.transaction_date <= ?'; params.push(filters.endDate) }
     if (filters.search) { sql += ' AND t.merchant_name LIKE ?'; params.push(`%${filters.search}%`) }
-    const limitVal = Math.max(1, Math.min(Math.floor(Number(filters.limit) || 2000), 10000))
+    const limitVal = Math.max(1, Math.min(Math.floor(Number(filters.limit) || 50000), 50000))
     sql += ' ORDER BY t.transaction_date DESC LIMIT ?'
     params.push(limitVal)
     const rows = db.prepare(sql).all(...params)

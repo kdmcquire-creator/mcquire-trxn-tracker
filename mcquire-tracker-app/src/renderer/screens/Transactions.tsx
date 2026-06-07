@@ -80,7 +80,7 @@ export default function Transactions() {
     setLoading(true)
     setError(null)
     try {
-      const raw = await window.api.transactions.getAll().catch(() => [])
+      const raw = await window.api.transactions.getAll({ limit: 50000 }).catch(() => [])
       setRows(unwrap<any[]>(raw, []))
     } catch (e: any) {
       setError("Failed to load: " + (e?.message ?? "unknown"))
@@ -136,7 +136,7 @@ export default function Transactions() {
     await window.api.transactions.split(txId, fragments)
     // Reload in background to pick up split children — scroll position preserved
     // because React reconciles the table without unmounting
-    const raw = await window.api.transactions.getAll().catch(() => [])
+    const raw = await window.api.transactions.getAll({ limit: 50000 }).catch(() => [])
     setRows(unwrap<any[]>(raw, []))
   }, [])
 
