@@ -61,6 +61,7 @@ contextBridge.exposeInMainWorld('api', {
     getBlockerTransactions:      (payload?: { dateFrom?: string; dateTo?: string }) => ipcRenderer.invoke('reports:get-blocker-transactions', payload),
     checkOverlap:                (payload: { dateFrom: string; dateTo: string })  => ipcRenderer.invoke('reports:check-overlap', payload),
     confirmSubmitted:            (reportId: string)                               => ipcRenderer.invoke('reports:confirm-submitted', reportId),
+    generate1120S:               (inputs: any)                                    => ipcRenderer.invoke('reports:generate-1120s', inputs),
   },
 
   // ── Phase 2: Plaid sync + account management ────────────────────────────────

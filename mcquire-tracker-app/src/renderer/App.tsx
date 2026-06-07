@@ -220,6 +220,7 @@ declare global {
         getBlockerTransactions: (payload?: { dateFrom?: string; dateTo?: string }) => Promise<any>
         checkOverlap: (payload: { dateFrom: string; dateTo: string }) => Promise<any>
         confirmSubmitted: (reportId: string) => Promise<any>
+        generate1120S: (inputs: any) => Promise<any>
       }
       plaid: any
       accounts: any

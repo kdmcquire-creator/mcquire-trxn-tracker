@@ -308,3 +308,303 @@ export function validateExpenseReportReadiness(db: CompatDb, dateFrom: string, d
 
   return { valid: blocking.length === 0, blocking, warnings }
 }
+
+// ── IRS Form 1120-S & Schedule K-1 Export ──────────────────────────────
+// Maps Moonsmoke LLC expense categories to IRS line items
+
+interface ScorpInputs {
+  taxYear: string
+  grossReceipts: number
+  officerCompensation: number
+  distributions: number
+  otherIncome: number
+  beginningCash: number
+  endingCash: number
+}
+
+const LLC_TO_1120S: Record<string, { line: string; label: string }> = {
+  'Rent - Business Lodging':       { line: '11', label: 'Rents' },
+  'Lodging - Business Housing':    { line: '11', label: 'Rents' },
+  'Utilities - Home Office':       { line: '19', label: 'Other deductions — Utilities' },
+  'Executive Wellness':            { line: '18', label: 'Employee benefit programs' },
+  'Payroll - Salary':              { line: '7',  label: 'Compensation of officers' },
+  'Business Services - Payroll':   { line: '19', label: 'Other deductions — Payroll services' },
+  'Business Services - Software':  { line: '19', label: 'Other deductions — Software/subscriptions' },
+  'Business Services - Other':     { line: '19', label: 'Other deductions — Business services' },
+  'Telephone - Business Line':     { line: '19', label: 'Other deductions — Telephone' },
+  'Bank Fees':                     { line: '19', label: 'Other deductions — Bank fees' },
+  'Taxes - Payroll':               { line: '12', label: 'Taxes and licenses' },
+  'Meals & Entertainment':         { line: '19', label: 'Other deductions — Meals (50% deductible)' },
+  'Travel':                        { line: '19', label: 'Other deductions — Travel' },
+  'Office Expenses':               { line: '19', label: 'Other deductions — Office expenses' },
+  'Business Expenses - Other':     { line: '19', label: 'Other deductions — Other' },
+}
+
+export async function generate1120SWorkbook(
+  db: CompatDb,
+  inputs: ScorpInputs,
+  outputPath: string
+): Promise<{ file_path: string }> {
+  const year = inputs.taxYear
+  const dateFrom = `${year}-01-01`
+  const dateTo = `${year}-12-31`
+
+  // Pull all Moonsmoke LLC transactions for the tax year
+  const txs = db.prepare(`
+    SELECT t.llc_category, SUM(ABS(t.amount)) as total, COUNT(*) as cnt
+    FROM transactions t
+    WHERE t.bucket = 'Moonsmoke LLC'
+      AND t.transaction_date >= ? AND t.transaction_date <= ?
+      AND t.review_status IN ('auto_classified', 'manually_classified')
+      AND NOT EXISTS (SELECT 1 FROM transactions c WHERE c.split_parent_id = t.id)
+    GROUP BY t.llc_category
+    ORDER BY t.llc_category
+  `).all(dateFrom, dateTo) as Array<{ llc_category: string; total: number; cnt: number }>
+
+  // Also pull detail rows for the statement attachment
+  const detailTxs = db.prepare(`
+    SELECT t.transaction_date, t.merchant_name, t.description_raw, t.llc_category,
+           t.amount, t.description_notes, a.account_mask
+    FROM transactions t
+    JOIN accounts a ON a.id = t.account_id
+    WHERE t.bucket = 'Moonsmoke LLC'
+      AND t.transaction_date >= ? AND t.transaction_date <= ?
+      AND t.review_status IN ('auto_classified', 'manually_classified')
+      AND NOT EXISTS (SELECT 1 FROM transactions c WHERE c.split_parent_id = t.id)
+    ORDER BY t.transaction_date ASC
+  `).all(dateFrom, dateTo) as Array<{
+    transaction_date: string; merchant_name: string; description_raw: string;
+    llc_category: string; amount: number; description_notes: string; account_mask: string
+  }>
+
+  // Build line-item totals
+  const lineTotals: Record<string, { label: string; amount: number; categories: string[] }> = {}
+  for (const tx of txs) {
+    const mapping = LLC_TO_1120S[tx.llc_category] ?? { line: '19', label: `Other deductions — ${tx.llc_category}` }
+    if (!lineTotals[mapping.line]) {
+      lineTotals[mapping.line] = { label: mapping.label, amount: 0, categories: [] }
+    }
+    lineTotals[mapping.line].amount += tx.total
+    if (!lineTotals[mapping.line].categories.includes(tx.llc_category)) {
+      lineTotals[mapping.line].categories.push(tx.llc_category)
+    }
+  }
+
+  const totalDeductions = Object.values(lineTotals).reduce((s, l) => s + l.amount, 0)
+  const ordinaryIncome = inputs.grossReceipts + inputs.otherIncome - totalDeductions
+
+  const wb = new ExcelJS.Workbook()
+  wb.creator = 'McQuire Tracker'
+
+  // ═══ Tab 1: Form 1120-S Summary ═══════════════════════════════════════
+  const ws1 = wb.addWorksheet('1120-S')
+
+  ws1.getColumn(1).width = 10
+  ws1.getColumn(2).width = 50
+  ws1.getColumn(3).width = 18
+  ws1.getColumn(4).width = 30
+
+  // Title
+  ws1.mergeCells('A1:D1')
+  const title1 = ws1.getCell('A1')
+  title1.value = `IRS Form 1120-S — Moonsmoke LLC — Tax Year ${year}`
+  title1.font = { name: 'Arial', size: 14, bold: true, color: { argb: NAVY } }
+  title1.alignment = { horizontal: 'center' }
+  ws1.getRow(1).height = 28
+
+  ws1.mergeCells('A2:D2')
+  ws1.getCell('A2').value = 'S Corporation Income Tax Return — Auto-generated from McQuire Tracker'
+  ws1.getCell('A2').font = { name: 'Arial', size: 9, italic: true, color: { argb: '666666' } }
+  ws1.getCell('A2').alignment = { horizontal: 'center' }
+
+  // Headers
+  const hdr = ws1.getRow(4)
+  ;['Line', 'Description', 'Amount', 'Source Categories'].forEach((h, i) => {
+    const cell = hdr.getCell(i + 1)
+    cell.value = h
+    allBorders(cell)
+  })
+  headerStyle(ws1, hdr)
+
+  // Income section
+  let row = 5
+  const addLine = (line: string, desc: string, amount: number | null, note?: string) => {
+    const r = ws1.getRow(row)
+    r.getCell(1).value = line; r.getCell(1).font = { name: 'Arial', size: 9, bold: true }
+    r.getCell(2).value = desc; r.getCell(2).font = { name: 'Arial', size: 9 }
+    if (amount !== null) {
+      r.getCell(3).value = amount
+      r.getCell(3).numFmt = '$#,##0.00'
+      r.getCell(3).alignment = { horizontal: 'right' }
+    }
+    r.getCell(3).font = { name: 'Arial', size: 9 }
+    r.getCell(4).value = note ?? ''; r.getCell(4).font = { name: 'Arial', size: 8, italic: true, color: { argb: '888888' } }
+    r.eachCell(c => allBorders(c))
+    dataRow(r, row % 2 === 0)
+    row++
+  }
+
+  // Section: Income
+  const sectionRow = ws1.getRow(row)
+  ws1.mergeCells(`A${row}:D${row}`)
+  sectionRow.getCell(1).value = 'INCOME'
+  sectionRow.getCell(1).font = { name: 'Arial', size: 10, bold: true, color: { argb: WHITE } }
+  sectionRow.getCell(1).fill = navyFill()
+  sectionRow.getCell(1).alignment = { horizontal: 'center' }
+  sectionRow.eachCell(c => allBorders(c))
+  row++
+
+  addLine('1a', 'Gross receipts or sales', inputs.grossReceipts, 'Manual entry')
+  addLine('5', 'Other income', inputs.otherIncome, 'Manual entry')
+  addLine('6', 'Total income (1a + 5)', inputs.grossReceipts + inputs.otherIncome)
+
+  // Section: Deductions
+  const dedRow = ws1.getRow(row)
+  ws1.mergeCells(`A${row}:D${row}`)
+  dedRow.getCell(1).value = 'DEDUCTIONS'
+  dedRow.getCell(1).font = { name: 'Arial', size: 10, bold: true, color: { argb: WHITE } }
+  dedRow.getCell(1).fill = navyFill()
+  dedRow.getCell(1).alignment = { horizontal: 'center' }
+  dedRow.eachCell(c => allBorders(c))
+  row++
+
+  // Line 7: Officer compensation (from payroll or manual input)
+  const payrollFromTx = lineTotals['7']?.amount ?? 0
+  const officerComp = inputs.officerCompensation || payrollFromTx
+  addLine('7', 'Compensation of officers', officerComp, payrollFromTx > 0 ? `From transactions: ${lineTotals['7']?.categories.join(', ')}` : 'Manual entry')
+
+  // Line 11: Rents
+  if (lineTotals['11']) addLine('11', 'Rents', lineTotals['11'].amount, lineTotals['11'].categories.join(', '))
+
+  // Line 12: Taxes and licenses
+  if (lineTotals['12']) addLine('12', 'Taxes and licenses', lineTotals['12'].amount, lineTotals['12'].categories.join(', '))
+
+  // Line 18: Employee benefit programs
+  if (lineTotals['18']) addLine('18', 'Employee benefit programs', lineTotals['18'].amount, lineTotals['18'].categories.join(', '))
+
+  // Line 19: Other deductions (itemized)
+  const line19Total = lineTotals['19']?.amount ?? 0
+  if (line19Total > 0) {
+    addLine('19', 'Other deductions (see attached statement)', line19Total, lineTotals['19']?.categories.join(', '))
+
+    // Sub-itemize line 19 by category
+    for (const tx of txs) {
+      const mapping = LLC_TO_1120S[tx.llc_category]
+      if (mapping?.line === '19') {
+        addLine('', `    ${mapping.label}`, tx.total, `${tx.cnt} transactions`)
+      }
+    }
+
+    // Meals at 50%
+    const mealsEntry = txs.find(t => t.llc_category === 'Meals & Entertainment')
+    if (mealsEntry) {
+      addLine('', '    ↳ Meals 50% deductible amount', mealsEntry.total * 0.5, 'IRS limits meals deduction to 50%')
+    }
+  }
+
+  // Totals
+  addLine('20', 'Total deductions', totalDeductions)
+  row++
+  addLine('21', 'Ordinary business income (loss)', ordinaryIncome)
+
+  // Section: Balance Sheet (Schedule L)
+  row += 2
+  const bsRow = ws1.getRow(row)
+  ws1.mergeCells(`A${row}:D${row}`)
+  bsRow.getCell(1).value = 'SCHEDULE L — BALANCE SHEET (simplified)'
+  bsRow.getCell(1).font = { name: 'Arial', size: 10, bold: true, color: { argb: WHITE } }
+  bsRow.getCell(1).fill = navyFill()
+  bsRow.getCell(1).alignment = { horizontal: 'center' }
+  bsRow.eachCell(c => allBorders(c))
+  row++
+  addLine('', 'Cash — beginning of year', inputs.beginningCash, 'Manual entry')
+  addLine('', 'Cash — end of year', inputs.endingCash, 'Manual entry')
+  addLine('', 'Distributions to shareholders', inputs.distributions, 'Manual entry')
+
+  // ═══ Tab 2: Schedule K-1 ══════════════════════════════════════════════
+  const ws2 = wb.addWorksheet('K-1')
+  ws2.getColumn(1).width = 10
+  ws2.getColumn(2).width = 50
+  ws2.getColumn(3).width = 18
+
+  ws2.mergeCells('A1:C1')
+  ws2.getCell('A1').value = `Schedule K-1 (Form 1120-S) — Moonsmoke LLC — Tax Year ${year}`
+  ws2.getCell('A1').font = { name: 'Arial', size: 14, bold: true, color: { argb: NAVY } }
+  ws2.getCell('A1').alignment = { horizontal: 'center' }
+  ws2.getRow(1).height = 28
+
+  ws2.mergeCells('A2:C2')
+  ws2.getCell('A2').value = "Shareholder's Share of Income, Deductions, Credits — Kyle McQuire (100%)"
+  ws2.getCell('A2').font = { name: 'Arial', size: 9, italic: true, color: { argb: '666666' } }
+  ws2.getCell('A2').alignment = { horizontal: 'center' }
+
+  const k1hdr = ws2.getRow(4)
+  ;['Box', 'Description', 'Amount'].forEach((h, i) => {
+    k1hdr.getCell(i + 1).value = h
+    allBorders(k1hdr.getCell(i + 1))
+  })
+  headerStyle(ws2, k1hdr)
+
+  let k1row = 5
+  const addK1 = (box: string, desc: string, amount: number) => {
+    const r = ws2.getRow(k1row)
+    r.getCell(1).value = box; r.getCell(1).font = { name: 'Arial', size: 9, bold: true }
+    r.getCell(2).value = desc; r.getCell(2).font = { name: 'Arial', size: 9 }
+    r.getCell(3).value = amount; r.getCell(3).numFmt = '$#,##0.00'
+    r.getCell(3).font = { name: 'Arial', size: 9 }
+    r.getCell(3).alignment = { horizontal: 'right' }
+    r.eachCell(c => allBorders(c))
+    dataRow(r, k1row % 2 === 0)
+    k1row++
+  }
+
+  addK1('1', 'Ordinary business income (loss)', ordinaryIncome)
+  addK1('16d', 'Distributions', inputs.distributions)
+
+  // ═══ Tab 3: Transaction Detail (attached statement for Line 19) ═══════
+  const ws3 = wb.addWorksheet('Transaction Detail')
+  ws3.getColumn(1).width = 12
+  ws3.getColumn(2).width = 28
+  ws3.getColumn(3).width = 28
+  ws3.getColumn(4).width = 14
+  ws3.getColumn(5).width = 10
+  ws3.getColumn(6).width = 30
+
+  ws3.mergeCells('A1:F1')
+  ws3.getCell('A1').value = `Moonsmoke LLC — Expense Detail — ${year}`
+  ws3.getCell('A1').font = { name: 'Arial', size: 12, bold: true, color: { argb: NAVY } }
+  ws3.getCell('A1').alignment = { horizontal: 'center' }
+  ws3.getRow(1).height = 24
+
+  const detHdr = ws3.getRow(2)
+  ;['Date', 'Category', 'Merchant', 'Amount', 'Card', 'Notes'].forEach((h, i) => {
+    detHdr.getCell(i + 1).value = h
+    allBorders(detHdr.getCell(i + 1))
+  })
+  headerStyle(ws3, detHdr)
+
+  let detTotal = 0
+  detailTxs.forEach((tx, idx) => {
+    const r = ws3.getRow(idx + 3)
+    ;[tx.transaction_date, tx.llc_category ?? '', tx.merchant_name ?? tx.description_raw,
+      Math.abs(tx.amount), `···${tx.account_mask ?? ''}`, tx.description_notes ?? ''].forEach((v, i) => {
+      const cell = r.getCell(i + 1)
+      cell.value = v
+      if (i === 3) { cell.numFmt = '$#,##0.00'; cell.alignment = { horizontal: 'right' } }
+    })
+    dataRow(r, idx % 2 === 0)
+    detTotal += Math.abs(tx.amount)
+  })
+
+  const dtRow = ws3.getRow(detailTxs.length + 3)
+  ws3.mergeCells(`A${detailTxs.length + 3}:C${detailTxs.length + 3}`)
+  dtRow.getCell(1).value = 'TOTAL'
+  dtRow.getCell(1).font = { name: 'Arial', size: 10, bold: true }
+  dtRow.getCell(1).alignment = { horizontal: 'right' }
+  dtRow.getCell(4).value = detTotal
+  dtRow.getCell(4).numFmt = '$#,##0.00'
+  dtRow.getCell(4).font = { name: 'Arial', size: 10, bold: true }
+
+  await wb.xlsx.writeFile(outputPath)
+  return { file_path: outputPath }
+}

@@ -10,6 +10,7 @@ import { FinancialStatementsService } from './financial-statements.service'
 import {
   generatePeak10ExpenseReport,
   validateExpenseReportReadiness,
+  generate1120SWorkbook,
 } from './excel-export'
 import * as path from 'path'
 
@@ -212,6 +213,21 @@ export function registerFinancialStatementsHandlers(
       const outputPath = path.join(exportDir, `Peak10_ExpenseReport_${ts}.xlsx`)
       const result = await generatePeak10ExpenseReport(db, dateFrom, dateTo, label, outputPath, { includeAlreadyReported })
       return { success: true, data: { filePath: result.file_path, total: result.total, count: result.count, reportId: result.report_id } }
+    } catch (err: any) {
+      return { success: false, error: err.message }
+    }
+  })
+
+  // ── 1120-S / K-1 generation ─────────────────────────────────────────────────
+
+  ipcMain.handle('reports:generate-1120s', async (_event, inputs: any) => {
+    try {
+      const exportDir = path.join(getSyncFolder(), 'exports', 'tax')
+      fs.mkdirSync(exportDir, { recursive: true })
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19)
+      const outputPath = path.join(exportDir, `Moonsmoke_1120S_K1_${inputs.taxYear}_${ts}.xlsx`)
+      const result = await generate1120SWorkbook(db, inputs, outputPath)
+      return { success: true, data: { filePath: result.file_path } }
     } catch (err: any) {
       return { success: false, error: err.message }
     }

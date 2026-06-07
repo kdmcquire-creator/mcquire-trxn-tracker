@@ -21,6 +21,7 @@ function parseNoteSuggestions(rawNotes: Array<{ note: string; use_count: number 
 
 const REPORT_TYPES = [
   { id: "expense_report", label: "Peak 10 Expense Report", icon: "🏢", description: "Submission-ready Excel file for reimbursement. Covers the period you specify." },
+  { id: "1120s", label: "1120-S / K-1 (Moonsmoke)", icon: "📑", description: "IRS Form 1120-S and Schedule K-1 mapped from Moonsmoke LLC transactions. Includes attached expense detail." },
   { id: "pnl", label: "Moonsmoke LLC P&L", icon: "📈", description: "Income statement by month, accrual basis." },
   { id: "balance_sheet", label: "Moonsmoke LLC Balance Sheet", icon: "📊", description: "Quarterly snapshots." },
   { id: "cashflow", label: "Moonsmoke LLC Cashflow", icon: "💵", description: "Direct-method cash flow by quarter." },
@@ -67,6 +68,15 @@ export default function Reports() {
   const [generating, setGenerating] = useState(false)
   const [lastGenerated, setLastGenerated] = useState<{ path: string; report: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  // 1120-S inputs
+  const [taxYear, setTaxYear] = useState("2025")
+  const [grossReceipts, setGrossReceipts] = useState("")
+  const [officerComp, setOfficerComp] = useState("")
+  const [distributions, setDistributions] = useState("")
+  const [otherIncome, setOtherIncome] = useState("")
+  const [beginningCash, setBeginningCash] = useState("")
+  const [endingCash, setEndingCash] = useState("")
 
   // Blocker modal state
   const [showBlockerModal, setShowBlockerModal] = useState(false)
@@ -211,6 +221,17 @@ export default function Reports() {
       switch (selectedReport) {
         case "expense_report":
           result = await window.api.reports.generateExpenseReport(payload)
+          break
+        case "1120s":
+          result = await window.api.reports.generate1120S({
+            taxYear,
+            grossReceipts: parseFloat(grossReceipts) || 0,
+            officerCompensation: parseFloat(officerComp) || 0,
+            distributions: parseFloat(distributions) || 0,
+            otherIncome: parseFloat(otherIncome) || 0,
+            beginningCash: parseFloat(beginningCash) || 0,
+            endingCash: parseFloat(endingCash) || 0,
+          })
           break
         case "pnl":
           result = await window.api.statements.pandl(payload)
@@ -370,6 +391,75 @@ export default function Reports() {
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* 1120-S inputs */}
+          {selectedReport === "1120s" && (
+            <div className="mb-5 space-y-4">
+              <div>
+                <label className="text-xs font-semibold text-slate-500 uppercase block mb-1">Tax Year</label>
+                <select value={taxYear} onChange={e => setTaxYear(e.target.value)}
+                  className="border border-slate-300 rounded-lg px-3 py-2 text-sm w-32">
+                  <option value="2025">2025</option>
+                  <option value="2024">2024</option>
+                  <option value="2026">2026</option>
+                </select>
+              </div>
+
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <p className="text-sm font-semibold text-blue-800 mb-3">Manual Inputs (not tracked in app)</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs text-slate-500 block mb-1">Gross Receipts (Line 1a)</label>
+                    <input type="number" step="0.01" value={grossReceipts} onChange={e => setGrossReceipts(e.target.value)}
+                      placeholder="Total revenue received by Moonsmoke"
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-500 block mb-1">Officer Compensation (Line 7)</label>
+                    <input type="number" step="0.01" value={officerComp} onChange={e => setOfficerComp(e.target.value)}
+                      placeholder="Your W-2 salary from Moonsmoke"
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-500 block mb-1">Distributions (K-1 Box 16d)</label>
+                    <input type="number" step="0.01" value={distributions} onChange={e => setDistributions(e.target.value)}
+                      placeholder="Shareholder distributions taken"
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-500 block mb-1">Other Income (Line 5)</label>
+                    <input type="number" step="0.01" value={otherIncome} onChange={e => setOtherIncome(e.target.value)}
+                      placeholder="Interest, etc. (usually 0)"
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-500 block mb-1">Cash — Beginning of Year</label>
+                    <input type="number" step="0.01" value={beginningCash} onChange={e => setBeginningCash(e.target.value)}
+                      placeholder="Bank balance Jan 1"
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-500 block mb-1">Cash — End of Year</label>
+                    <input type="number" step="0.01" value={endingCash} onChange={e => setEndingCash(e.target.value)}
+                      placeholder="Bank balance Dec 31"
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs text-slate-500">
+                <p className="font-semibold text-slate-600 mb-1">What gets auto-populated from your transactions:</p>
+                <ul className="list-disc list-inside space-y-0.5">
+                  <li>Line 11 — Rents (from Rent/Lodging categories)</li>
+                  <li>Line 12 — Taxes and licenses (Payroll taxes)</li>
+                  <li>Line 18 — Employee benefit programs (Executive Wellness)</li>
+                  <li>Line 19 — Other deductions: utilities, software, phone, bank fees, meals (50%), travel, office</li>
+                  <li>Schedule K-1 Box 1 — Ordinary income (auto-calculated)</li>
+                  <li>Full transaction detail attached as a third tab</li>
+                </ul>
+              </div>
             </div>
           )}
 
