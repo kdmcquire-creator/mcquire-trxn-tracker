@@ -569,6 +569,41 @@ function runMigrations(database: CompatDb): void {
     console.log(`[Migration 011] Reset expense_report_id on ${cleared.changes} transactions, cleared all draft reports`)
     database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('011-reset-expense-report-tags')
   }
+
+  // Migration 012: un-exclude transactions that were incorrectly caught by
+  // cross-account dedup migrations (005, 008, 009, 010).
+  // The ±2 day same-amount rule was too aggressive for recurring charges
+  // (rent, subscriptions, utilities) that legitimately appear at the same
+  // amount every month. This restores them and reclassifies.
+  if (!applied('012-restore-false-positive-dedup')) {
+    const falseDupes = database.prepare(`
+      SELECT id, merchant_name, description_raw, amount, transaction_date, account_id
+      FROM transactions
+      WHERE bucket = 'Exclude'
+        AND flag_reason LIKE '%Cross-account duplicate%migration%'
+    `).all() as Array<{
+      id: string; merchant_name: string; description_raw: string;
+      amount: number; transaction_date: string; account_id: string
+    }>
+
+    if (falseDupes.length > 0) {
+      // Restore: set back to pending_review so they get reclassified
+      const restore = database.prepare(`
+        UPDATE transactions
+        SET bucket = NULL, review_status = 'pending_review',
+            flag_reason = 'Restored from false-positive dedup (migration 012)',
+            updated_at = datetime('now')
+        WHERE id = ?
+      `)
+      const run = database.transaction(() => {
+        for (const tx of falseDupes) restore.run(tx.id)
+      })
+      run()
+      console.log(`[Migration 012] Restored ${falseDupes.length} false-positive dedup exclusions for reclassification`)
+    }
+
+    database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('012-restore-false-positive-dedup')
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

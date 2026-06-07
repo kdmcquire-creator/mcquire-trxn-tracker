@@ -432,6 +432,20 @@ export class PlaidService {
   ): boolean {
     // Allow ±2 day tolerance to catch pending vs posted date offsets
     // (e.g., card 9007 shows pending on day N, card 2419 posts on day N+1 or N+2)
+
+    // First: check if this merchant+amount is a recurring charge on the OTHER account.
+    // If it appears 3+ times on that account, it's a subscription/recurring — not a duplicate.
+    const recurringCheck = this.db
+      .prepare(
+        `SELECT COUNT(*) as n FROM transactions t
+         WHERE t.account_id != ?
+           AND t.merchant_name = ?
+           AND t.amount = ?
+           AND t.bucket != 'Exclude'`
+      )
+      .get(accountId, merchantNorm, amount) as { n: number }
+    if (recurringCheck.n >= 3) return false
+
     const matches = this.db
       .prepare(
         `SELECT COUNT(*) as n FROM transactions t

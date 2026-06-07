@@ -280,12 +280,19 @@ export class HistoricalImportService {
 
         // Cross-account dedup: same merchant + amount + date (±2 days) on a different account
         // means this charge already exists (e.g., DoorDash appearing on two cards).
+        // Skip dedup for recurring charges (3+ of same merchant+amount on the other account).
         const merchantNorm = normalizeMerchant(
           row['Merchant'] || row['Original Statement'] || row['Description'] || ''
         )
         const txDate = this.normalizeDate(row[dateCol] || '')
         const txAmount = this.parseAmount(row[amountCol] || '0')
-        const crossAcct = this.db
+        const recurringCheck = this.db
+          .prepare(
+            `SELECT COUNT(*) as n FROM transactions
+             WHERE account_id != ? AND merchant_name = ? AND amount = ? AND bucket != 'Exclude'`
+          )
+          .get(accountId, merchantNorm, txAmount) as { n: number }
+        const crossAcct = recurringCheck.n >= 3 ? { n: 0 } : this.db
           .prepare(
             `SELECT COUNT(*) as n FROM transactions
              WHERE account_id != ?
