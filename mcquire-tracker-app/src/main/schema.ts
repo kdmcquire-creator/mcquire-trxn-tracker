@@ -7,6 +7,7 @@ import { createHash } from 'crypto'
 import { initSqlJsDatabase, type CompatDb } from '../../electron/services/database'
 import { normalizeMerchant } from '../../electron/services/classification-engine'
 import { restoreRecurringExclusions, recurringMerchantVerdict } from '../../electron/services/recurring-repair'
+import { reprioritizePaymentExclude } from '../../electron/services/payment-exclude-repair'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Database initialization
@@ -669,6 +670,18 @@ function runMigrations(database: CompatDb): void {
 
     database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('014-restore-recurring-dedup')
   }
+
+  // Migration 015: the "Payment Category Exclude" rule (excl-004, contains:'payment')
+  // was seeded at priority 103 — ahead of the vendor rules — so any vendor charge
+  // whose bank text contains "payment" was excluded instead of classified. Bilt rent
+  // posts as "...BILT PAYMENT...BILTRENT", so ~half of it was silently dropped from
+  // the ledger. Demote excl-004 below the vendor rules and re-classify the rows it
+  // wrongly excluded (Bilt → Moonsmoke LLC); genuine card payments stay excluded.
+  if (!applied('015-reprioritize-payment-exclude')) {
+    const { moved } = reprioritizePaymentExclude(database)
+    console.log(`[Migration 015] Demoted excl-004 (payment exclude) below vendor rules; reclassified ${moved} previously-excluded vendor charges`)
+    database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('015-reprioritize-payment-exclude')
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -694,7 +707,10 @@ function seedClassificationRules(database: CompatDb): void {
     ['excl-001','CC Payment Exclude','exclusion','contains','credit card payment',null,null,null,null,null,null,'Exclude',null,null,null,null,'exclude',100,''],
     ['excl-002','Transfer Exclude','exclusion','contains','transfer',null,null,null,null,null,null,'Exclude',null,null,null,null,'exclude',101,''],
     ['excl-003','Apple Card Payment Exclude','exclusion','contains','apple card payment',null,null,null,null,null,null,'Exclude',null,null,null,null,'exclude',102,''],
-    ['excl-004','Payment Category Exclude','exclusion','contains','payment',null,null,null,null,null,null,'Exclude',null,null,null,null,'exclude',103,''],
+    // NOTE: priority 8999 (not 1xx) is intentional — must run AFTER vendor rules so
+    // a vendor charge containing the word "payment" (e.g. Bilt rent) classifies
+    // first; only unmatched genuine card payments fall through to this. See migration 015.
+    ['excl-004','Payment Category Exclude','exclusion','contains','payment',null,null,null,null,null,null,'Exclude',null,null,null,null,'exclude',8999,'Demoted below vendor rules (migration 015) so vendor charges containing "payment" are not wrongly excluded'],
 
     // ── LLC Always (200–299) ─────────────────────────────────────────────────
     ['llc-001','Gexa Energy','llc_always','contains','gexa energy',null,null,null,null,null,null,'Moonsmoke LLC',null,'Utilities - Home Office',null,null,'classify',200,'Houston apt electricity'],
