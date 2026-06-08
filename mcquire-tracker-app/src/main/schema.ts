@@ -8,6 +8,7 @@ import { initSqlJsDatabase, type CompatDb } from '../../electron/services/databa
 import { normalizeMerchant } from '../../electron/services/classification-engine'
 import { restoreRecurringExclusions, recurringMerchantVerdict } from '../../electron/services/recurring-repair'
 import { reprioritizePaymentExclude } from '../../electron/services/payment-exclude-repair'
+import { reclassifyExcludedAttBills } from '../../electron/services/attbill-repair'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Database initialization
@@ -682,6 +683,17 @@ function runMigrations(database: CompatDb): void {
     console.log(`[Migration 015] Demoted excl-004 (payment exclude) below vendor rules; reclassified ${moved} previously-excluded vendor charges`)
     database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('015-reprioritize-payment-exclude')
   }
+
+  // Migration 016: the AT&T wireless bill (mask 5829) posts as "ATT* BILL PAYMENT",
+  // which the exact:'at&t' rules never matched, so it was swept into the 'payment'
+  // exclude. The seed now carries three contains:'att bill' rules banded by amount
+  // (<$100 → LLC business line, $100-299 → Peak 10 work line, ≥$300 → split_flag for
+  // the 832-687-0468 split). Reclassify the rows that were already excluded.
+  if (!applied('016-att-wireless-bill-rules')) {
+    const { toLLC, toP10, toReview } = reclassifyExcludedAttBills(database)
+    console.log(`[Migration 016] AT&T wireless bills: ${toLLC} -> Moonsmoke LLC, ${toP10} -> Peak 10, ${toReview} -> Review Queue (split)`)
+    database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('016-att-wireless-bill-rules')
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -733,6 +745,9 @@ function seedClassificationRules(database: CompatDb): void {
     ['llc-018','Chase Monthly Fee 2255','llc_always','contains','monthly service fee','2255',null,null,null,null,null,'Moonsmoke LLC',null,'Bank Fees',null,null,'classify',217,'Chase BUS 2255 monthly fee'],
     ['llc-019','Chase ATM Fee 2255','llc_always','contains','atm fee','2255',null,null,null,null,null,'Moonsmoke LLC',null,'Bank Fees',null,null,'classify',218,''],
     ['llc-020','Chase Wire Fee 2255','llc_always','contains','wire fee','2255',null,null,null,null,null,'Moonsmoke LLC',null,'Bank Fees',null,null,'classify',219,''],
+    // AT&T wireless bill posts as "ATT* BILL PAYMENT" (not exact 'at&t'); match 'att bill'
+    // (0 false positives) on the 5829 account, banded by amount. See migration 016.
+    ['llc-021','AT&T Wireless Bill <$100','llc_always','contains','att bill','5829',null,99.99,null,null,null,'Moonsmoke LLC',null,'Telephone - Business Line',null,null,'classify',220,'AT&T wireless business line — see migration 016'],
 
     // ── P10 Always (300–399) ─────────────────────────────────────────────────
     ['p10-001','Park House Houston','p10_always','contains','park house',null,null,null,null,null,null,'Peak 10','Meals & Meetings - external',null,null,null,'classify',300,''],
@@ -772,6 +787,9 @@ function seedClassificationRules(database: CompatDb): void {
     ['p10-035','7-Eleven Gas','p10_always','contains','7-eleven',null,null,null,null,null,null,'Peak 10','Travel',null,'Fuel',null,'classify',334,''],
     ['p10-036','Chevron','p10_always','contains','chevron',null,null,null,null,null,null,'Peak 10','Travel',null,'Fuel',null,'classify',335,''],
     ['p10-037','Valero','p10_always','contains','valero',null,null,null,null,null,null,'Peak 10','Travel',null,'Fuel',null,'classify',336,''],
+    // AT&T wireless bill, mid + large bands (small <$100 band is llc-021). See migration 016.
+    ['p10-038','AT&T Wireless Bill $100-299','p10_always','contains','att bill','5829',100,299.99,null,null,null,'Peak 10','Telephone & Communication',null,null,null,'classify',337,'AT&T wireless work line — see migration 016'],
+    ['p10-039','AT&T Wireless Bill >=$300 Split','p10_always','contains','att bill','5829',300,null,null,null,null,'Peak 10','Telephone & Communication',null,'⚠️ AT&T split required — pull 832-687-0468 business line cost from att.com','split_flag',338,'Combined AT&T wireless bill — split work line vs personal; see migration 016'],
 
     // ── P10 Conditional (400–499) ────────────────────────────────────────────
     ['p10-cond-001','Mon-Thu Restaurant ≥$95','p10_conditional','contains','conditional_restaurant','5829',95,null,'1,2,3,4',null,null,'Peak 10','Meals & Meetings - external',null,null,'⚠️ Add attendee names','classify',400,'Mon=1 Tue=2 Wed=3 Thu=4; Monarch category = Restaurants & Bars'],
