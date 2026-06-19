@@ -2,7 +2,7 @@
 // McQuire Financial Tracker — Electron Main Process
 // Thin orchestrator: delegates to schema.ts, ipc-handlers.ts, and service modules.
 
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, Menu } from 'electron'
 import { join } from 'path'
 import * as path from 'path'
 import * as fs from 'fs'
@@ -33,6 +33,52 @@ app.setAsDefaultProtocolClient('mcquire-tracker')
 let mainWindow: BrowserWindow | null = null
 let db: CompatDb | null = null
 let syncFolderPath: string = ''
+let lifecycleRef: AppLifecycleService | null = null
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Application menu (File → Quit) + reliable quit
+// ─────────────────────────────────────────────────────────────────────────────
+function forceQuit(): void {
+  if (lifecycleRef) {
+    lifecycleRef.quitApp()
+  } else {
+    // First run (no sync folder yet) — no tray/lock to tear down.
+    ;(app as any).isQuiting = true
+    app.quit()
+  }
+}
+
+function setupApplicationMenu(): void {
+  const template: Electron.MenuItemConstructorOptions[] = [
+    {
+      label: 'File',
+      submenu: [
+        { label: 'Quit McQuire Tracker', accelerator: 'CmdOrCtrl+Q', click: () => forceQuit() },
+      ],
+    },
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' }, { role: 'redo' }, { type: 'separator' },
+        { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' },
+      ],
+    },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' }, { role: 'forceReload' }, { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' },
+        { type: 'separator' }, { role: 'togglefullscreen' },
+      ],
+    },
+    {
+      label: 'Window',
+      submenu: [{ role: 'minimize' }, { role: 'close' }],
+    },
+  ]
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Sync folder config — loaded from userData config, or set during setup wizard
@@ -147,6 +193,7 @@ async function bootstrapServices(folder: string): Promise<void> {
   registerHistoricalImportHandlers(db, () => mainWindow)
 
   const lifecycle = AppLifecycleService.getInstance(folder, () => mainWindow)
+  lifecycleRef = lifecycle
   const { lockConflict, lockInfo } = await lifecycle.initialize()
   lifecycle.registerIpcHandlers()
 
@@ -235,6 +282,7 @@ function registerWatchedFolderHandlers(database: CompatDb, folder: string): void
 // App startup
 // ─────────────────────────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
+  setupApplicationMenu()
   mainWindow = createWindow()
 
   syncFolderPath = loadSyncFolderPath()
