@@ -1,6 +1,6 @@
 {
   "name": "mcquire-tracker",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "McQuire Financial Tracker — Desktop Application",
   "main": "dist-electron/main/index.js",
   "author": "Kyle McQuire",
@@ -55,6 +55,14 @@
     "directories": {
       "output": "dist-installer"
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "kdmcquire-creator",
+        "repo": "mcq-tx-track",
+        "releaseType": "release"
+      }
+    ],
     "win": {
       "target": [
         {
