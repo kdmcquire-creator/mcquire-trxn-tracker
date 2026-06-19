@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react"
 import { P10_CATEGORIES, LLC_CATEGORIES } from "../../shared/types"
+import { applySplitCascade } from "../../shared/split-cascade"
 
 /* ── Helpers ───────────────────────────────────────────────────────────────── */
 
@@ -405,7 +406,7 @@ export default function AssignmentWizard({ transactions, onClassify, onSplit, on
                 <div className="text-sm font-semibold text-slate-500 uppercase tracking-wide">Split Transaction</div>
                 <button onClick={() => setIsSplitMode(false)} className="text-xs text-slate-400 hover:text-slate-600">Cancel split</button>
               </div>
-              <p className="text-xs text-slate-500">Total: {fmt(tx.amount)}. Enter amounts and select entities.</p>
+              <p className="text-xs text-slate-500">Total: {fmt(tx.amount)}. Enter an amount and tab out — the next fragment auto-fills with the remaining balance. Lower it to add another.</p>
 
               {splitEntries.map((entry, i) => (
                 <div key={i} className="bg-slate-50 rounded-xl p-4 space-y-2 border border-slate-200">
@@ -417,6 +418,7 @@ export default function AssignmentWizard({ transactions, onClassify, onSplit, on
                         updated[i] = { ...updated[i], amount: e.target.value }
                         setSplitEntries(updated)
                       }}
+                      onBlur={() => setSplitEntries(prev => applySplitCascade(prev, tx.amount, i))}
                       className="border border-slate-300 rounded-lg px-3 py-2 text-sm" />
                     <select value={entry.entity}
                       onChange={e => {
