@@ -9,6 +9,7 @@ import { normalizeMerchant } from '../../electron/services/classification-engine
 import { restoreRecurringExclusions, recurringMerchantVerdict } from '../../electron/services/recurring-repair'
 import { reprioritizePaymentExclude } from '../../electron/services/payment-exclude-repair'
 import { reclassifyExcludedAttBills } from '../../electron/services/attbill-repair'
+import { reclassifyAttExtras } from '../../electron/services/att-extra-repair'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Database initialization
@@ -694,6 +695,16 @@ function runMigrations(database: CompatDb): void {
     console.log(`[Migration 016] AT&T wireless bills: ${toLLC} -> Moonsmoke LLC, ${toP10} -> Peak 10, ${toReview} -> Review Queue (split)`)
     database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('016-att-wireless-bill-rules')
   }
+
+  // Migration 017: the remaining AT&T charges (not the wireless "bill"). MOBILITY
+  // EPAY is the same wireless account, so it is banded like the bill; ATT BUSINESS
+  // UVERSE → Peak 10 and UVERSE CONS → Moonsmoke LLC (Kyle's calls). Reclassify the
+  // mis-bucketed (Personal) rows; rows already Excluded as duplicates are left alone.
+  if (!applied('017-att-mobility-uverse')) {
+    const { reclassified } = reclassifyAttExtras(database)
+    console.log(`[Migration 017] AT&T mobility / U-verse reclassified ${reclassified} rows`)
+    database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('017-att-mobility-uverse')
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -748,6 +759,9 @@ function seedClassificationRules(database: CompatDb): void {
     // AT&T wireless bill posts as "ATT* BILL PAYMENT" (not exact 'at&t'); match 'att bill'
     // (0 false positives) on the 5829 account, banded by amount. See migration 016.
     ['llc-021','AT&T Wireless Bill <$100','llc_always','contains','att bill','5829',null,99.99,null,null,null,'Moonsmoke LLC',null,'Telephone - Business Line',null,null,'classify',220,'AT&T wireless business line — see migration 016'],
+    // AT&T mobility (same wireless account, banded like the bill) + U-verse consumer. See migration 017.
+    ['llc-022','AT&T Mobility <$100','llc_always','contains','at&t mobility','5829',null,99.99,null,null,null,'Moonsmoke LLC',null,'Telephone - Business Line',null,null,'classify',221,'AT&T mobility business line — see migration 017'],
+    ['llc-023','AT&T U-verse Consumer','llc_always','contains','uverse cons',null,null,null,null,null,null,'Moonsmoke LLC',null,'Utilities - Home Office',null,null,'classify',222,'UVERSE CONS SW EVR → Moonsmoke LLC (Kyle) — see migration 017'],
 
     // ── P10 Always (300–399) ─────────────────────────────────────────────────
     ['p10-001','Park House Houston','p10_always','contains','park house',null,null,null,null,null,null,'Peak 10','Meals & Meetings - external',null,null,null,'classify',300,''],
@@ -790,6 +804,10 @@ function seedClassificationRules(database: CompatDb): void {
     // AT&T wireless bill, mid + large bands (small <$100 band is llc-021). See migration 016.
     ['p10-038','AT&T Wireless Bill $100-299','p10_always','contains','att bill','5829',100,299.99,null,null,null,'Peak 10','Telephone & Communication',null,null,null,'classify',337,'AT&T wireless work line — see migration 016'],
     ['p10-039','AT&T Wireless Bill >=$300 Split','p10_always','contains','att bill','5829',300,null,null,null,null,'Peak 10','Telephone & Communication',null,'⚠️ AT&T split required — pull 832-687-0468 business line cost from att.com','split_flag',338,'Combined AT&T wireless bill — split work line vs personal; see migration 016'],
+    // AT&T mobility (epay) mid/large bands + business U-verse. See migration 017.
+    ['p10-040','AT&T Mobility $100-299','p10_always','contains','at&t mobility','5829',100,299.99,null,null,null,'Peak 10','Telephone & Communication',null,null,null,'classify',339,'AT&T mobility work line — see migration 017'],
+    ['p10-041','AT&T Mobility >=$300 Split','p10_always','contains','at&t mobility','5829',300,null,null,null,null,'Peak 10','Telephone & Communication',null,'⚠️ AT&T split required — pull 832-687-0468 business line cost from att.com','split_flag',340,'Combined AT&T mobility bill — split; see migration 017'],
+    ['p10-042','AT&T Business U-verse','p10_always','contains','business uverse',null,null,null,null,null,null,'Peak 10','Telephone & Communication',null,null,null,'classify',341,'ATT BUSINESS UVERSE → Peak 10 (Kyle) — see migration 017'],
 
     // ── P10 Conditional (400–499) ────────────────────────────────────────────
     ['p10-cond-001','Mon-Thu Restaurant ≥$95','p10_conditional','contains','conditional_restaurant','5829',95,null,'1,2,3,4',null,null,'Peak 10','Meals & Meetings - external',null,null,'⚠️ Add attendee names','classify',400,'Mon=1 Tue=2 Wed=3 Thu=4; Monarch category = Restaurants & Bars'],
