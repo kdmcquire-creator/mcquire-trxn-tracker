@@ -10,6 +10,7 @@ import { restoreRecurringExclusions, recurringMerchantVerdict } from '../../elec
 import { reprioritizePaymentExclude } from '../../electron/services/payment-exclude-repair'
 import { reclassifyExcludedAttBills } from '../../electron/services/attbill-repair'
 import { reclassifyAttExtras } from '../../electron/services/att-extra-repair'
+import { restoreReviewedExclusions } from '../../electron/services/reviewed-restore'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Database initialization
@@ -704,6 +705,17 @@ function runMigrations(database: CompatDb): void {
     const { reclassified } = reclassifyAttExtras(database)
     console.log(`[Migration 017] AT&T mobility / U-verse reclassified ${reclassified} rows`)
     database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('017-att-mobility-uverse')
+  }
+
+  // Migration 018: restore 48 business charges the cross-account dedup wrongly
+  // excluded (no real duplicate). Kyle reviewed each against his statements on
+  // 2026-06-08 and assigned the bucket (30 Peak 10, 18 Moonsmoke LLC); the list
+  // lives in electron/services/reviewed-restore.ts so a DB rebuild reproduces the
+  // decisions. Idempotent — a row no longer in Exclude is skipped.
+  if (!applied('018-restore-reviewed-exclusions')) {
+    const { restored } = restoreReviewedExclusions(database)
+    console.log(`[Migration 018] Restored ${restored} reviewed exclusions to their assigned buckets`)
+    database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('018-restore-reviewed-exclusions')
   }
 }
 
