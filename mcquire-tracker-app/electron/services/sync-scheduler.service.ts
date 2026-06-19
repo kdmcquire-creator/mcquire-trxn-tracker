@@ -8,6 +8,7 @@
 
 import * as cron from 'node-cron'
 import type { CompatDb } from './database'
+import { rematchPendingAttBills } from './att-bill-ingest'
 import { BrowserWindow } from 'electron'
 import { PlaidService } from './plaid.service'
 import type { SyncResult } from '../../src/shared/plaid.types'
@@ -171,6 +172,9 @@ export class SyncScheduler {
         total_queued: totalQueued,
         has_errors: hasErrors,
       })
+
+      // A newly-synced charge may complete a pending AT&T bill split.
+      try { rematchPendingAttBills(this.db) } catch { /* non-fatal */ }
 
       // Send email notifications
       if (reauthNeeded.length > 0) {

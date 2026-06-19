@@ -17,6 +17,8 @@ import { registerInvestmentsIpcHandlers } from '../../electron/services/investme
 import { registerFinancialStatementsHandlers } from '../../electron/services/financial-statements-ipc'
 import { registerHistoricalImportHandlers } from '../../electron/services/historical-import.service'
 import { AppLifecycleService } from '../../electron/services/app-lifecycle.service'
+import { registerAttBillIpc } from '../../electron/services/att-bill-ipc'
+import { rematchPendingAttBills } from '../../electron/services/att-bill-ingest'
 
 // ── Local modules ────────────────────────────────────────────────────────────
 import { initDatabase } from './schema'
@@ -191,6 +193,7 @@ async function bootstrapServices(folder: string): Promise<void> {
   // ── Phase 4: Financial statements + import wizard + lifecycle ───────────
   registerFinancialStatementsHandlers(db, () => folder)
   registerHistoricalImportHandlers(db, () => mainWindow)
+  registerAttBillIpc(db, () => mainWindow)
 
   const lifecycle = AppLifecycleService.getInstance(folder, () => mainWindow)
   lifecycleRef = lifecycle
@@ -217,6 +220,9 @@ async function bootstrapServices(folder: string): Promise<void> {
 
   // File watcher for USAA + Apple Card drop folders
   registerWatchedFolderHandlers(db, folder)
+
+  // Apply any AT&T bills whose autopay charge already exists.
+  try { rematchPendingAttBills(db) } catch (e) { console.warn('[Main] startup AT&T re-match failed:', e) }
 
   console.log('[Main] All services bootstrapped for sync folder:', folder)
 }
@@ -266,6 +272,8 @@ function registerWatchedFolderHandlers(database: CompatDb, folder: string): void
             file: path.basename(filePath),
             ...result,
           })
+          // A newly-imported charge may complete a pending AT&T bill split.
+          try { rematchPendingAttBills(database) } catch (e) { console.warn('[Watcher] AT&T re-match failed:', e) }
         } catch (err) {
           console.error(`[Watcher] ${type} import failed:`, err)
         }
