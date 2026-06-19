@@ -247,10 +247,7 @@ export class AppLifecycleService {
         { type: 'separator' },
         {
           label: 'Quit McQuire Tracker',
-          click: () => {
-            this.releaseLock()
-            app.quit()
-          },
+          click: () => this.quitApp(),
         },
       ])
 
@@ -287,10 +284,25 @@ export class AppLifecycleService {
     this.tray = null
   }
 
+  /**
+   * Fully quit the app. The tray keeps Electron alive after the window closes,
+   * and the window's close handler hides-to-tray unless `isQuiting` is set — so a
+   * reliable quit must set that flag, tear down the tray, release the lock, then
+   * quit. Wired to both the tray menu and the File → Quit menu item.
+   */
+  quitApp(): void {
+    ;(app as any).isQuiting = true
+    try { this.releaseLock() } catch { /* non-fatal */ }
+    try { this.destroyTray() } catch { /* non-fatal */ }
+    app.quit()
+  }
+
   // ─── Auto-updater ─────────────────────────────────────────────────────────────
 
   private setupAutoUpdater(): void {
-    autoUpdater.autoDownload = false
+    // Hands-off updates: download new versions in the background, then install
+    // them automatically the next time the app quits. No prompts, no setup.
+    autoUpdater.autoDownload = true
     autoUpdater.autoInstallOnAppQuit = true
 
     autoUpdater.on('checking-for-update', () => {

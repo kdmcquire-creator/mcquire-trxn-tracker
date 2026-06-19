@@ -53,7 +53,12 @@ Run from `mcquire-tracker-app/`:
 | `npm run build:unpackaged` | Kills running app, fast `--dir` build (no installer) |
 
 - **CI:** `.github/workflows/ci.yml` (added 2026-06-07) runs `npm run check` on push.
-- **No auto-deploy / no Cloudflare / no Netlify** — this is a desktop app. "Shipping" = building the installer and running it.
+- **Auto-update is LIVE (1.0.1+, 2026-06-08).** `electron-builder` publishes the installer + `latest.yml` to the public **`kdmcquire-creator/mcq-tx-track`** repo (binaries only — no code/data). The installed app (`autoDownload=true` + `autoInstallOnAppQuit`, in `app-lifecycle.service.ts`) checks that feed on launch, downloads in the background, and installs on next quit — no prompts. **To ship an update:** bump `version` in `package.json`, then from `mcquire-tracker-app/`:
+  ```
+  $env:GH_TOKEN = (gh auth token); npx electron-vite build; npx electron-builder --publish always
+  ```
+  1.0.1 was the first auto-update-capable build (installed once manually; 1.0.2+ are automatic). No Cloudflare/Netlify — it's a desktop app.
+- **Quit:** the window-close button minimizes to the system tray (by design). **File → Quit (Ctrl+Q)** fully exits via `AppLifecycleService.quitApp()` (sets `isQuiting`, releases lock, destroys tray, quits). The application menu is defined in `src/main/index.ts` (`setupApplicationMenu`).
 - **Toolchain verified 2026-06-07:** node v20.20.0, vitest 4.1.0, tsc 5.9.3. Typecheck clean, **74/74 tests pass**.
 
 ## 4. Data store
@@ -94,6 +99,8 @@ Run from `mcquire-tracker-app/`:
 
 ## 9. Bug-fix log & non-obvious gotchas
 
+**Splitting a charge to Peak 10 / Moonsmoke LLC crashed: "Wrong API use : tried to bind a value of an unknown type (undefined)".** *Root cause:* the split UI (`AssignmentWizard`) sends fragments shaped `{ bucket, amount, p10_category?, llc_category?, description_notes? }`, but the `transactions:split` IPC handler read the **stale** shape `frag.category` / `frag.notes` — so `frag.category` was always `undefined`, and **sql.js (unlike better-sqlite3) throws when you bind `undefined`**. Hit first on the AT&T splits (business portion → Peak 10). *Fix (PR #11):* extracted `electron/services/transaction-split.ts` (`splitTransaction`), reading the correct fields with `?? null` + a ≥2-valid-fragments guard. **Lessons: (1) the sql.js compat wrapper does NOT coerce `undefined`→`null` — always `?? null` optional bind params; (2) a renderer/handler field-name mismatch silently yields `undefined`. A blanket wrapper coercion was deliberately NOT added — it would have masked this as silent null-category data loss instead of a loud crash.**
+
 **The README phase table is stale.** It says Phase 1 is "this build" and Phases 2–4 are "planned." **In reality all four phases are wired** (`src/preload/index.ts:3` — "All four phases wired"): Plaid, Investments, financial statements, historical import, and auto-updater code all exist. Trust the code, not that table. *(Fix pending — see §10.)*
 
 **Recurring charges (e.g. Bilt rent) vanished from the ledger.** *Root cause:* aggressive cross-account ±2-day dedup (migrations 009/010) treated a same-merchant + same-amount **monthly recurring** charge as a duplicate and excluded it. *Fix:* migration `012` (restore false-positives), `013` (diagnose missing recurring), `014` (self-healing restore: any charge with the same merchant+amount in **3+ distinct months** is recurring, not a dup — genuine one-offs stay excluded). Dedup logic was unified into `electron/services/dedup.ts` with the recurring guard built in, and covered by `tests/dedup.test.ts` + `tests/recurring-repair.test.ts`. **If transactions look "missing," check dedup before assuming an import gap** — migration 013 prints a per-merchant distinct-month verdict to tell the two apart.
@@ -131,6 +138,7 @@ Run from `mcquire-tracker-app/`:
 
 ## 11. Recent significant work (most recent first)
 
+- **2026-06-08 (real-data classification audit + desktop polish — PRs #7–#12, all merged):** found ~$24k of real business expense silently parked in `Exclude`. Fixed at the rules layer: Bilt rent priority (#7 / migration 015), AT&T wireless bill (#8 / 016), AT&T mobility + U-verse (#9 / 017), and 48 hand-reviewed restorations (#10 / 018). Then the `transactions:split` undefined-bind crash (#11). Then **File → Quit + a reliable-quit fix, and auto-update going live** (#12) — feed = public `mcq-tx-track` repo, first auto-update build **1.0.1**.
 - **2026-06-07 (afternoon, cloud session → PRs #3–#6, all merged to `main`):**
   - `#6` Harden core logic — test harness (49→**74** tests), extracted dedup/recurring-repair/`compute1120S`, `npm run check`, CI workflow, fixed the Reports click-event + NULL-unsafe dedup bugs (`efe0294`).
   - `#5`/diagnosis — fix dedup false positives, diagnose & restore missing Bilt recurring charges, migrations 012–014 (`e6c7437`, `d2a9dd2`).
