@@ -4,6 +4,7 @@
 import { ipcMain, dialog, shell, BrowserWindow } from 'electron'
 import * as path from 'path'
 import type { CompatDb } from '../../electron/services/database'
+import { splitTransaction, type SplitFragment } from '../../electron/services/transaction-split'
 import { reclassifyPendingAfterRuleChange, invalidateTripDateCache, learnFromClassification } from '../../electron/services/classification-engine'
 import { saveClaudeApiKey, hasClaudeApiKey, deleteClaudeApiKey, suggestClassification, suggestBatch } from '../../electron/services/claude-classifier'
 import { configureOllama, isOllamaEnabled, getOllamaModel, testOllamaConnection, classifyWithOllama, loadHistoricalDecisions, analyzeDuplicateBatch } from '../../electron/services/ollama.service'
@@ -243,26 +244,10 @@ export function registerAppIpcHandlers(state: AppState): void {
     return { success: true, data: rows }
   })
 
-  ipcMain.handle('transactions:split', (_event: Electron.IpcMainInvokeEvent, parentId: string, fragments: Array<{ bucket: string; amount: number; category: string; notes?: string }>) => {
+  ipcMain.handle('transactions:split', (_event: Electron.IpcMainInvokeEvent, parentId: string, fragments: SplitFragment[]) => {
     const db = getDb()
     if (!db) return { success: false, error: 'DB not initialized' }
-    const { v4: uuidv4 } = require('uuid')
-    const tx = db.transaction(() => {
-      db.prepare("UPDATE transactions SET is_split_child = 0, review_status = 'manually_classified', updated_at = datetime('now') WHERE id = ?").run(parentId)
-      for (const frag of fragments) {
-        db.prepare(
-          `INSERT INTO transactions
-            (id, account_id, transaction_date, description_raw, merchant_name, amount,
-             bucket, p10_category, llc_category, description_notes, review_status,
-             split_parent_id, is_split_child, created_at, updated_at)
-           SELECT ?, account_id, transaction_date, description_raw, merchant_name, ?,
-             ?, ?, ?, ?, 'manually_classified', ?, 1, datetime('now'), datetime('now')
-           FROM transactions WHERE id = ?`
-        ).run(uuidv4(), frag.amount, frag.bucket, frag.bucket === 'Peak 10' ? frag.category : null, frag.bucket === 'Moonsmoke LLC' ? frag.category : null, frag.notes || null, parentId, parentId)
-      }
-    })
-    tx()
-    return { success: true }
+    return splitTransaction(db, parentId, fragments)
   })
 
   // ── Notes history (for review queue suggestions) ──────────────────────────
