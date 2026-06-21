@@ -1,6 +1,6 @@
 {
   "name": "mcquire-tracker",
-  "version": "1.0.2",
+  "version": "1.0.4",
   "description": "McQuire Financial Tracker — Desktop Application",
   "main": "dist-electron/main/index.js",
   "author": "Kyle McQuire",
@@ -23,6 +23,7 @@
     "node-cron": "^3.0.3",
     "nodemailer": "^8.0.4",
     "papaparse": "^5.4.1",
+    "pdf-parse": "^1.1.1",
     "plaid": "^26.0.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",

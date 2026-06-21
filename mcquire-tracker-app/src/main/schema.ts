@@ -194,6 +194,22 @@ export async function initDatabase(folder: string): Promise<CompatDb> {
       value TEXT NOT NULL
     );
 
+    -- AT&T bill auto-split: one parsed bill per account+month, matched to the autopay charge
+    CREATE TABLE IF NOT EXISTS att_bills (
+      id              TEXT PRIMARY KEY,
+      account_number  TEXT NOT NULL,
+      issue_date      TEXT NOT NULL,
+      autopay_date    TEXT,
+      bill_total      REAL NOT NULL,
+      line_0468       REAL NOT NULL,
+      source_file     TEXT,
+      status          TEXT NOT NULL DEFAULT 'pending',   -- pending | split | review
+      matched_txn_id  TEXT,
+      created_at      TEXT DEFAULT (datetime('now')),
+      updated_at      TEXT DEFAULT (datetime('now')),
+      UNIQUE(account_number, issue_date)
+    );
+
     -- Migration tracking
     CREATE TABLE IF NOT EXISTS migrations (
       id         TEXT PRIMARY KEY,

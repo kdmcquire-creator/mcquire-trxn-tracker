@@ -64,6 +64,15 @@ contextBridge.exposeInMainWorld('api', {
     generate1120S:               (inputs: any)                                    => ipcRenderer.invoke('reports:generate-1120s', inputs),
   },
 
+  // ── AT&T bill auto-split ─────────────────────────────────────────────────────
+  attBills: {
+    pick:             ()                                 => ipcRenderer.invoke('att-bill:pick'),
+    importPaths:      (paths: string[])                  => ipcRenderer.invoke('att-bill:import-paths', paths),
+    list:             ()                                 => ipcRenderer.invoke('att-bill:list'),
+    reviewCandidates: (billId: string)                   => ipcRenderer.invoke('att-bill:review-candidates', billId),
+    confirm:          (billId: string, chargeId: string) => ipcRenderer.invoke('att-bill:confirm', billId, chargeId),
+  },
+
   // ── Phase 2: Plaid sync + account management ────────────────────────────────
   plaid:    plaidBridge,
   accounts: accountsBridge,

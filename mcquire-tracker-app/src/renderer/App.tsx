@@ -7,9 +7,10 @@ import Transactions from "./screens/Transactions"
 import Reports from "./screens/Reports"
 import Investments from "./screens/Investments"
 import Settings from "./screens/Settings/index"
+import AttBills from "./screens/AttBills"
 import SetupWizard from "./screens/SetupWizard"
 
-export type Screen = "dashboard" | "review" | "transactions" | "reports" | "investments" | "settings"
+export type Screen = "dashboard" | "review" | "transactions" | "reports" | "attbills" | "investments" | "settings"
 
 /* ── Toast notification system ─────────────────────────────────────────────── */
 interface Toast {
@@ -130,6 +131,7 @@ export default function App() {
     review: <ErrorBoundary fallbackLabel="Review Queue"><ReviewQueue onPendingChange={setPendingCount} /></ErrorBoundary>,
     transactions: <ErrorBoundary fallbackLabel="Transactions"><Transactions /></ErrorBoundary>,
     reports: <ErrorBoundary fallbackLabel="Reports"><Reports /></ErrorBoundary>,
+    attbills: <ErrorBoundary fallbackLabel="AT&T Bills"><AttBills /></ErrorBoundary>,
     investments: <ErrorBoundary fallbackLabel="Investments"><Investments /></ErrorBoundary>,
     settings: <ErrorBoundary fallbackLabel="Settings"><Settings /></ErrorBoundary>,
   }
@@ -221,6 +223,13 @@ declare global {
         checkOverlap: (payload: { dateFrom: string; dateTo: string }) => Promise<any>
         confirmSubmitted: (reportId: string) => Promise<any>
         generate1120S: (inputs: any) => Promise<any>
+      }
+      attBills: {
+        pick: () => Promise<any>
+        importPaths: (paths: string[]) => Promise<any>
+        list: () => Promise<any>
+        reviewCandidates: (billId: string) => Promise<any>
+        confirm: (billId: string, chargeId: string) => Promise<any>
       }
       plaid: any
       accounts: any
