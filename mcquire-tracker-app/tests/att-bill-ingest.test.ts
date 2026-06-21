@@ -21,7 +21,7 @@ function attBillsTable(db: CompatDb): void {
 }
 function addCharge(db: CompatDb, id: string, amount: number, date: string): void {
   db.prepare("INSERT INTO transactions (id, account_id, transaction_date, description_raw, merchant_name, " +
-    "amount, bucket, review_status) VALUES (?, 'a', ?, 'ATT* BILL PAYMENT', 'AT&T', ?, NULL, 'auto_classified')")
+    "amount, bucket, review_status) VALUES (?, 'a', ?, 'ATT* BILL PAYMENT', 'AT&T', ?, NULL, 'pending_review')")
     .run(id, date, amount)
 }
 

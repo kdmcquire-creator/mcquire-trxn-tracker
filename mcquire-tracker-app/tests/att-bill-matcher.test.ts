@@ -32,6 +32,11 @@ describe('AT&T bill → charge matcher', () => {
       .toMatchObject({ action: 'review' })
   })
 
+  it('matches a pending_review charge (the autopay the split rule flagged)', () => {
+    expect(matchBillToCharge(bill, [charge('c1', 488.73, '2026-05-20', { review_status: 'pending_review' })]))
+      .toMatchObject({ action: 'split', targetId: 'c1' })
+  })
+
   it('ignores charges already split / manually classified / excluded', () => {
     expect(matchBillToCharge(bill, [charge('c1', 488.73, '2026-05-20', { review_status: 'manually_classified' })]))
       .toEqual({ action: 'pending' })

@@ -37,7 +37,7 @@ export function matchBillToCharge(bill: ParsedAttBill, charges: ChargeCandidate[
     .filter(c =>
       Math.abs(c.amount - bill.billTotal) < 0.005 &&                 // exact to the cent
       t(c.date) >= issue && t(c.date) <= issue + WINDOW_DAYS * DAY && // in the window
-      c.review_status === 'auto_classified' &&                       // untouched
+      c.review_status !== 'manually_classified' &&                   // candidate unless Kyle already decided it (auto/pending/flagged OK)
       c.bucket !== 'Exclude')
     .sort((a, b) => t(a.date) - t(b.date))
 

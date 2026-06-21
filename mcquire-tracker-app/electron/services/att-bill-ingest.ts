@@ -26,7 +26,7 @@ function attChargeCandidates(db: CompatDb): ChargeCandidate[] {
   return db.prepare(`
     SELECT id, ABS(amount) AS amount, transaction_date AS date, bucket, review_status
     FROM transactions
-    WHERE review_status = 'auto_classified'
+    WHERE review_status != 'manually_classified'
       AND (bucket IS NULL OR bucket != 'Exclude')
       AND is_split_child = 0
       AND (LOWER(description_raw) LIKE '%at&t%' OR LOWER(description_raw) LIKE '%att %'
