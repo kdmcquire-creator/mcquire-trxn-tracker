@@ -1,9 +1,10 @@
 import ExcelJS from 'exceljs'
 import type { CompatDb } from './database'
 import type { Transaction } from '../../src/shared/types'
+import * as fs from 'fs'
+import { fillExpenseTemplate, type ExpenseRow } from './expense-template-fill'
 
 const NAVY = '1F3864'
-const LBLUE = 'BDD7EE'
 const WHITE = 'FFFFFF'
 
 function navyFill() { return { type: 'pattern' as const, pattern: 'solid' as const, fgColor: { argb: NAVY } } }
@@ -29,6 +30,13 @@ function dataRow(row: ExcelJS.Row, isEven: boolean) {
     cell.alignment = { vertical: 'middle' }
   })
   row.height = 15
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+/** 'Dec2025' from an ISO date — for the "mmmyyyy - mmmyyyy" report title/period. */
+function monthYear(iso: string): string {
+  const [y, m] = iso.split('-').map(Number)
+  return `${MONTHS[m - 1]}${y}`
 }
 
 // ── Peak 10 Expense Report ─────────────────────────────────────────────
@@ -62,84 +70,28 @@ export async function generatePeak10ExpenseReport(
     ORDER BY t.transaction_date ASC
   `).all(dateFrom, dateTo, cutoff) as Transaction[]
 
-  const wb = new ExcelJS.Workbook()
-  wb.creator = 'McQuire Tracker'
+  // Fill the Peak 10 template (preserves its Table, formulas, and formatting).
+  // Account column = the canonical p10_category (migration 019). Mileage / per-diem
+  // columns stay blank — the app doesn't track them — so each amount passes through.
+  const rows: ExpenseRow[] = txs.map(tx => ({
+    date: tx.transaction_date,
+    entity: 'Peak 10 Energy Management',
+    account: tx.p10_category ?? '',
+    merchant: tx.merchant_name ?? tx.description_raw,
+    notes: tx.description_notes ?? '',
+    amount: Math.abs(tx.amount),
+  }))
+  const total = rows.reduce((sum, r) => sum + r.amount, 0)
 
-  const ws = wb.addWorksheet('Expense Report')
+  // Title + "Month" reflect the actual expense span as "mmmyyyy - mmmyyyy"
+  // (txs are ordered by date ascending).
+  const period = txs.length
+    ? `${monthYear(txs[0].transaction_date)} - ${monthYear(txs[txs.length - 1].transaction_date)}`
+    : periodLabel
+  const title = `Kyle McQuire Expense Report: ${period}`
 
-  // Title
-  ws.mergeCells('A1:S1')
-  const titleCell = ws.getCell('A1')
-  titleCell.value = `Peak 10 Energy Management — Expense Report: ${periodLabel}`
-  titleCell.font = { name: 'Arial', size: 12, bold: true, color: { argb: NAVY } }
-  titleCell.alignment = { horizontal: 'center', vertical: 'middle' }
-  ws.getRow(1).height = 24
-
-  // Column headers (matching Peak 10 template)
-  const headers = [
-    'Date', 'Entity', 'Account/Category', 'Merchant', 'Description/Notes',
-    'Amount ($)', 'Location', '# Nights', '# Employees', '# Guests',
-    '# People', 'Name', 'Title', 'Date of Report',
-    'Per Diem Lodging', 'Per Diem M&M', 'Billed to Fund Level',
-    'Paid by Op. Co.', 'Paid by Manager'
-  ]
-  const colWidths = [12,22,22,24,32,12,16,8,10,8,8,18,8,14,14,12,18,14,14]
-
-  const headerRow = ws.getRow(2)
-  headers.forEach((h, i) => {
-    const cell = headerRow.getCell(i + 1)
-    cell.value = h
-    allBorders(cell)
-  })
-  headerStyle(ws, headerRow)
-  headers.forEach((_, i) => { ws.getColumn(i + 1).width = colWidths[i] })
-
-  let total = 0
-  const today = new Date().toLocaleDateString('en-US')
-
-  txs.forEach((tx, idx) => {
-    const rowNum = idx + 3
-    const row = ws.getRow(rowNum)
-    const vals = [
-      tx.transaction_date,
-      'Peak 10 Energy Management',
-      tx.p10_category ?? '',
-      tx.merchant_name ?? tx.description_raw,
-      tx.description_notes ?? '',
-      Math.abs(tx.amount),
-      '', '', '', '', '',
-      'Kyle McQuire', 'CEO', today,
-      '', '', '', '', ''
-    ]
-    vals.forEach((v, i) => {
-      const cell = row.getCell(i + 1)
-      cell.value = v
-      if (i === 5) {
-        cell.numFmt = '$#,##0.00'
-        cell.alignment = { horizontal: 'right', vertical: 'middle' }
-      }
-    })
-    dataRow(row, idx % 2 === 0)
-    total += Math.abs(tx.amount)
-  })
-
-  // Total row
-  const totalRow = ws.getRow(txs.length + 3)
-  ws.mergeCells(`A${txs.length + 3}:E${txs.length + 3}`)
-  const totalLabelCell = totalRow.getCell(1)
-  totalLabelCell.value = 'TOTAL'
-  totalLabelCell.font = { name: 'Arial', size: 10, bold: true }
-  totalLabelCell.alignment = { horizontal: 'right' }
-
-  const totalAmtCell = totalRow.getCell(6)
-  totalAmtCell.value = total
-  totalAmtCell.font = { name: 'Arial', size: 10, bold: true }
-  totalAmtCell.numFmt = '$#,##0.00'
-  totalAmtCell.alignment = { horizontal: 'right' }
-  totalAmtCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LBLUE } }
-  totalRow.height = 18
-
-  await wb.xlsx.writeFile(outputPath)
+  const buf = await fillExpenseTemplate(rows, { title, period })
+  await fs.promises.writeFile(outputPath, buf)
 
   // Record the report as a draft — don't tag transactions yet.
   // Transactions only get tagged when the user confirms submission.
