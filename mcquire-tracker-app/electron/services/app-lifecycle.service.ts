@@ -354,7 +354,9 @@ export class AppLifecycleService {
 
   quitAndInstall(): void {
     ;(app as any).isQuiting = true
-    autoUpdater.quitAndInstall()
+    // isSilent=true (no installer wizard) + isForceRunAfter=true (relaunch) →
+    // a seamless one-click "restart & install" for the per-user installer.
+    autoUpdater.quitAndInstall(true, true)
   }
 
   // ─── IPC registration ─────────────────────────────────────────────────────────

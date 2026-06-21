@@ -126,6 +126,7 @@ contextBridge.exposeInMainWorld('api', {
 
 contextBridge.exposeInMainWorld('electronAPI', {
   selectFolder: ()               => ipcRenderer.invoke('app:select-folder'),
+  getVersion:   ()               => ipcRenderer.invoke('app:get-version'),
   getSyncFolder: ()              => ipcRenderer.invoke('app:get-sync-folder'),
   setSyncFolder: (p: string)     => ipcRenderer.invoke('app:set-sync-folder', p),
   initDatabase:  (folder: string) => ipcRenderer.invoke('app:init-database', folder),
