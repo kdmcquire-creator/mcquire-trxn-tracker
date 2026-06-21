@@ -1,7 +1,7 @@
 // src/main/ipc-handlers.ts
 // All app-level IPC handlers (setup wizard, transactions, rules, settings, etc.)
 
-import { ipcMain, dialog, shell, BrowserWindow } from 'electron'
+import { ipcMain, dialog, shell, BrowserWindow, app } from 'electron'
 import * as path from 'path'
 import type { CompatDb } from '../../electron/services/database'
 import { splitTransaction, type SplitFragment } from '../../electron/services/transaction-split'
@@ -35,6 +35,7 @@ export function registerAppIpcHandlers(state: AppState): void {
   })
 
   ipcMain.handle('app:get-sync-folder', () => getSyncFolder())
+  ipcMain.handle('app:get-version', () => app.getVersion())
 
   ipcMain.handle('app:set-sync-folder', async (_event: Electron.IpcMainInvokeEvent, folder: string) => {
     setSyncFolderPath(folder)

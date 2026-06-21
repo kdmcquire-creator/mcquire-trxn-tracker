@@ -33,6 +33,8 @@ export default function App() {
   const [pendingCount, setPendingCount] = useState(0)
   const [lockWarning, setLockWarning] = useState(false)
   const [toasts, setToasts] = useState<Toast[]>([])
+  const [updateReady, setUpdateReady] = useState<{ version?: string } | null>(null)
+  const [appVersion, setAppVersion] = useState<string>("")
 
   const addToast = useCallback((message: string, type: Toast["type"]) => {
     const id = _nextToastId++
@@ -55,6 +57,13 @@ export default function App() {
 
     try {
       ;(window as any).electron?.ipcRenderer?.on('lifecycle:lock-conflict', () => setLockWarning(true))
+    } catch {}
+
+    // Show the version, and a "Restart & install" banner once an update is downloaded.
+    try {
+      window.electronAPI?.getVersion?.().then((v: string) => setAppVersion(v)).catch(() => {})
+      window.api?.lifecycle?.onUpdateAvailable?.(() => addToast("Downloading an update in the background…", "info"))
+      window.api?.lifecycle?.onUpdateDownloaded?.((info: any) => setUpdateReady(info ?? {}))
     } catch {}
 
     // Listen for background learning engine results
@@ -144,6 +153,13 @@ export default function App() {
           <button onClick={() => setLockWarning(false)} className="ml-4 font-bold">✕</button>
         </div>
       )}
+      {updateReady && (
+        <div className={`fixed left-0 right-0 z-50 bg-green-600 text-white text-sm px-4 py-2 flex items-center justify-between shadow ${lockWarning ? "top-10" : "top-0"}`}>
+          <span>✓ A new version{updateReady.version ? ` (v${updateReady.version})` : ""} is downloaded and ready to install.</span>
+          <button onClick={() => window.api?.lifecycle?.installUpdate?.()}
+            className="ml-4 px-3 py-1 bg-white text-green-700 rounded font-semibold hover:bg-green-50 shrink-0">Restart &amp; install</button>
+        </div>
+      )}
       <Sidebar activeScreen={screen} onNavigate={setScreen} pendingCount={pendingCount} />
       <main className="flex-1 overflow-auto">
         {screens[screen]}
@@ -168,6 +184,7 @@ export default function App() {
           ))}
         </div>
       )}
+      <div className="fixed bottom-1 right-2 text-[10px] text-slate-400 z-40 pointer-events-none select-none">{appVersion ? `v${appVersion}` : ""}</div>
     </div>
   )
 }
@@ -177,6 +194,7 @@ declare global {
   interface Window {
     electronAPI: {
       selectFolder: () => Promise<string | null>
+      getVersion: () => Promise<string>
       getSyncFolder: () => Promise<string | null>
       setSyncFolder: (path: string) => Promise<void>
       initDatabase: (folder: string) => Promise<{ isNew: boolean }>
