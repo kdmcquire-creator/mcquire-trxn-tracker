@@ -11,6 +11,7 @@ import { reprioritizePaymentExclude } from '../../electron/services/payment-excl
 import { reclassifyExcludedAttBills } from '../../electron/services/attbill-repair'
 import { reclassifyAttExtras } from '../../electron/services/att-extra-repair'
 import { restoreReviewedExclusions } from '../../electron/services/reviewed-restore'
+import { remapP10Categories } from '../../electron/services/p10-category-cleanup'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Database initialization
@@ -733,6 +734,18 @@ function runMigrations(database: CompatDb): void {
     console.log(`[Migration 018] Restored ${restored} reviewed exclusions to their assigned buckets`)
     database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('018-restore-reviewed-exclusions')
   }
+
+  // Migration 019: align Peak 10 categories to the canonical expense-report
+  // "Account" list (P10_CATEGORIES). A few legacy values are remapped on both the
+  // seed rules and the already-bucketed transactions: "Office Supplies & Expenses"
+  // → Computer/Internet (Anthropic/Adobe), Postage & Delivery (UPS/Pak Mail), else
+  // Office Supplies/Equipment; parking charges filed under Travel → Parking;
+  // "Other - Executive Wellness" → Other; uncategorized Peak 10 → Other. Idempotent.
+  if (!applied('019-canonical-p10-categories')) {
+    const { txnsUpdated, rulesUpdated } = remapP10Categories(database)
+    console.log(`[Migration 019] Canonicalized Peak 10 categories: ${txnsUpdated} transactions, ${rulesUpdated} rules`)
+    database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('019-canonical-p10-categories')
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -795,8 +808,8 @@ function seedClassificationRules(database: CompatDb): void {
     ['p10-001','Park House Houston','p10_always','contains','park house',null,null,null,null,null,null,'Peak 10','Meals & Meetings - external',null,null,null,'classify',300,''],
     ['p10-002','Houston Club Parkhouse','p10_always','contains','houston club',null,null,null,null,null,null,'Peak 10','Meals & Meetings - external',null,null,null,'classify',301,''],
     ['p10-003','Briar Club Jan 2026+','p10_always','contains','briar club',null,null,null,null,'2026-01-01',null,'Peak 10','Meals & Meetings - external',null,null,'⚠️ Confirm split with Kyle','split_flag',302,'Split flag — ask Kyle for P10 vs personal allocation'],
-    ['p10-004','P Fitness','p10_always','contains','p fitness',null,null,null,null,null,null,'Peak 10','Other - Executive Wellness',null,null,null,'classify',303,''],
-    ['p10-005','CSC Service Works','p10_always','contains','csc service works',null,null,null,null,null,null,'Peak 10','Other - Executive Wellness',null,null,null,'classify',304,''],
+    ['p10-004','P Fitness','p10_always','contains','p fitness',null,null,null,null,null,null,'Peak 10','Other',null,null,null,'classify',303,''],
+    ['p10-005','CSC Service Works','p10_always','contains','csc service works',null,null,null,null,null,null,'Peak 10','Other',null,null,null,'classify',304,''],
     ['p10-006','Fjorn Consulting','p10_always','contains','fjorn',null,null,null,null,null,null,'Peak 10','Meals & Meetings - external',null,'Recruiting',null,'classify',305,''],
     ['p10-007','Hart Energy','p10_always','contains','hart energy',null,null,null,null,null,null,'Peak 10','Dues & Subscriptions',null,null,null,'classify',306,''],
     ['p10-008','Bari Houston','p10_always','contains','bari houston',null,null,null,null,null,null,'Peak 10','Meals & Meetings - external',null,null,'⚠️ Add attendee names','classify',307,''],
@@ -806,10 +819,10 @@ function seedClassificationRules(database: CompatDb): void {
     ['p10-012','Melrose','p10_always','contains','melrose',null,null,null,null,null,null,'Peak 10','Meals & Meetings - external',null,null,null,'classify',311,''],
     ['p10-013','Topgolf','p10_always','contains','topgolf',null,null,null,null,null,null,'Peak 10','Meals & Meetings - external',null,null,null,'classify',312,''],
     ['p10-014','Texas Richmond Corp','p10_always','contains','texas richmond',null,null,null,null,null,null,'Peak 10','Meals & Meetings - external',null,null,null,'classify',313,''],
-    ['p10-015','Adobe 5829','p10_always','contains','adobe','5829',null,null,null,null,null,'Peak 10','Office Supplies & Expenses',null,null,null,'classify',314,''],
+    ['p10-015','Adobe 5829','p10_always','contains','adobe','5829',null,null,null,null,null,'Peak 10','Computer/Internet',null,null,null,'classify',314,''],
     ['p10-016','Bloomberg','p10_always','contains','bloomberg',null,null,null,null,null,null,'Peak 10','Dues & Subscriptions',null,null,null,'classify',315,''],
     ['p10-017','Wall Street Journal','p10_always','contains','wall street journal',null,null,null,null,null,null,'Peak 10','Dues & Subscriptions',null,null,null,'classify',316,''],
-    ['p10-018','Anthropic Claude','p10_always','contains','anthropic',null,null,null,null,null,null,'Peak 10','Office Supplies & Expenses',null,null,null,'classify',317,'Claude subscription'],
+    ['p10-018','Anthropic Claude','p10_always','contains','anthropic',null,null,null,null,null,null,'Peak 10','Computer/Internet',null,null,null,'classify',317,'Claude subscription'],
     ['p10-019','Alamo Rent-A-Car','p10_always','contains','alamo rent',null,null,null,null,null,null,'Peak 10','Travel',null,null,null,'classify',318,'Not Alamo Toll'],
     ['p10-020','Hilton Hotels 5829','p10_always','contains','hilton','5829',null,null,null,null,null,'Peak 10','Lodging',null,null,null,'classify',319,''],
     ['p10-021','Four Seasons 5829','p10_always','contains','four seasons','5829',null,null,null,null,null,'Peak 10','Lodging',null,null,null,'classify',320,''],
@@ -819,10 +832,10 @@ function seedClassificationRules(database: CompatDb): void {
     ['p10-025','AT&T Large Bill Split','p10_always','exact','at&t','5829',300,null,null,null,null,'Peak 10','Telephone & Communication',null,null,'⚠️ AT&T split required — pull 832-687-0468 line cost from att.com','split_flag',324,''],
     ['p10-026','Payrix Numero 28 Austin','p10_always','contains','numero 28 austin','5829',null,null,null,null,null,'Peak 10','Meals & Meetings - external',null,null,null,'classify',325,''],
     ['p10-027','Annual Membership Sep 2025','p10_always','contains','annual membership fee','5829',299,299,null,'2025-09-01','2025-09-30','Peak 10','Dues & Subscriptions',null,null,null,'classify',326,''],
-    ['p10-028','W 2nd Street Parking','p10_always','contains','2nd street parking',null,null,null,null,null,null,'Peak 10','Travel',null,'Office parking',null,'classify',327,''],
-    ['p10-029','W 2nd St Garage','p10_always','contains','2nd st garage',null,null,null,null,null,null,'Peak 10','Travel',null,'Office parking',null,'classify',328,''],
-    ['p10-030','UPS','p10_always','contains','ups',null,null,null,null,null,null,'Peak 10','Office Supplies & Expenses',null,null,null,'classify',329,''],
-    ['p10-031','ParkMobile','p10_always','contains','parkmobile',null,null,null,null,null,null,'Peak 10','Travel',null,null,null,'classify',330,''],
+    ['p10-028','W 2nd Street Parking','p10_always','contains','2nd street parking',null,null,null,null,null,null,'Peak 10','Parking',null,'Office parking',null,'classify',327,''],
+    ['p10-029','W 2nd St Garage','p10_always','contains','2nd st garage',null,null,null,null,null,null,'Peak 10','Parking',null,'Office parking',null,'classify',328,''],
+    ['p10-030','UPS','p10_always','contains','ups',null,null,null,null,null,null,'Peak 10','Postage & Delivery',null,null,null,'classify',329,''],
+    ['p10-031','ParkMobile','p10_always','contains','parkmobile',null,null,null,null,null,null,'Peak 10','Parking',null,null,null,'classify',330,''],
     ['p10-032','Shell Gas','p10_always','contains','shell',null,null,null,null,null,null,'Peak 10','Travel',null,'Fuel',null,'classify',331,''],
     ['p10-033','ExxonMobil','p10_always','contains','exxon',null,null,null,null,null,null,'Peak 10','Travel',null,'Fuel',null,'classify',332,''],
     ['p10-034','Buc-ees','p10_always','contains',"buc-ee",null,null,null,null,null,null,'Peak 10','Travel',null,'Fuel',null,'classify',333,''],
