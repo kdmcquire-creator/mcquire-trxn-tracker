@@ -346,6 +346,19 @@ export class AppLifecycleService {
         // Network unavailable or update server unreachable — silently ignore
       })
     }, 5000)
+
+    // Re-check every 2 hours. The app minimizes to the tray and can stay open for
+    // days, so a one-time launch check would miss a release published meanwhile
+    // (e.g. it sat on 1.0.5 because it never re-checked). The periodic check finds
+    // the update, downloads it, and the renderer shows the "Restart & install" banner.
+    setInterval(() => {
+      autoUpdater.checkForUpdates().catch(() => { /* offline — ignore */ })
+    }, 2 * 60 * 60 * 1000)
+  }
+
+  /** Force an update check now — wired to the Help → Check for Updates menu item. */
+  checkForUpdatesNow(): void {
+    autoUpdater.checkForUpdates().catch(() => { /* offline — ignore */ })
   }
 
   downloadUpdate(): void {
