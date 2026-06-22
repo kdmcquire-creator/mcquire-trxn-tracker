@@ -78,6 +78,12 @@ function setupApplicationMenu(): void {
       label: 'Window',
       submenu: [{ role: 'minimize' }, { role: 'close' }],
     },
+    {
+      label: 'Help',
+      submenu: [
+        { label: 'Check for Updates', click: () => lifecycleRef?.checkForUpdatesNow() },
+      ],
+    },
   ]
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }

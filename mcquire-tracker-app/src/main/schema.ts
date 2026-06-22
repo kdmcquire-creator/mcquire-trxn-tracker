@@ -12,6 +12,7 @@ import { reclassifyExcludedAttBills } from '../../electron/services/attbill-repa
 import { reclassifyAttExtras } from '../../electron/services/att-extra-repair'
 import { restoreReviewedExclusions } from '../../electron/services/reviewed-restore'
 import { remapP10Categories } from '../../electron/services/p10-category-cleanup'
+import { reclassifyGasUnder25 } from '../../electron/services/gas-personal-repair'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Database initialization
@@ -746,6 +747,15 @@ function runMigrations(database: CompatDb): void {
     console.log(`[Migration 019] Canonicalized Peak 10 categories: ${txnsUpdated} transactions, ${rulesUpdated} rules`)
     database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('019-canonical-p10-categories')
   }
+
+  // Migration 020: gas-station fill-ups ≤ $25 are personal, not reimbursable Peak
+  // 10 travel. The seed rules pers-001..008 (priority 250s) route new ones to
+  // Personal; this moves the existing Peak 10 gas charges ≤ $25. Idempotent.
+  if (!applied('020-gas-under-25-personal')) {
+    const { moved } = reclassifyGasUnder25(database)
+    console.log(`[Migration 020] Moved ${moved} gas charges ≤ $25 from Peak 10 to Personal`)
+    database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('020-gas-under-25-personal')
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -849,6 +859,18 @@ function seedClassificationRules(database: CompatDb): void {
     ['p10-040','AT&T Mobility $100-299','p10_always','contains','at&t mobility','5829',100,299.99,null,null,null,'Peak 10','Telephone & Communication',null,null,null,'classify',339,'AT&T mobility work line — see migration 017'],
     ['p10-041','AT&T Mobility >=$300 Split','p10_always','contains','at&t mobility','5829',300,null,null,null,null,'Peak 10','Telephone & Communication',null,'⚠️ AT&T split required — pull 832-687-0468 business line cost from att.com','split_flag',340,'Combined AT&T mobility bill — split; see migration 017'],
     ['p10-042','AT&T Business U-verse','p10_always','contains','business uverse',null,null,null,null,null,null,'Peak 10','Telephone & Communication',null,null,null,'classify',341,'ATT BUSINESS UVERSE → Peak 10 (Kyle) — see migration 017'],
+
+    // ── Personal — gas fill-ups ≤ $25 (run BEFORE the P10 gas rules at 331+) ──
+    // A gas charge over $25 falls through to the P10 gas rule and stays Peak 10
+    // travel; ≤ $25 is a personal fill-up. See migration 020.
+    ['pers-001','Shell gas ≤$25 → Personal','personal','contains','shell',null,null,25,null,null,null,'Personal',null,null,null,null,'classify',250,'Small gas fill-up = personal, not reimbursable travel'],
+    ['pers-002','ExxonMobil gas ≤$25 → Personal','personal','contains','exxon',null,null,25,null,null,null,'Personal',null,null,null,null,'classify',251,'Small gas fill-up = personal'],
+    ['pers-003','Buc-ees gas ≤$25 → Personal','personal','contains','buc-ee',null,null,25,null,null,null,'Personal',null,null,null,null,'classify',252,'Small gas fill-up = personal'],
+    ['pers-004','7-Eleven gas ≤$25 → Personal','personal','contains','7-eleven',null,null,25,null,null,null,'Personal',null,null,null,null,'classify',253,'Small gas fill-up = personal'],
+    ['pers-005','Chevron gas ≤$25 → Personal','personal','contains','chevron',null,null,25,null,null,null,'Personal',null,null,null,null,'classify',254,'Small gas fill-up = personal'],
+    ['pers-006','Valero gas ≤$25 → Personal','personal','contains','valero',null,null,25,null,null,null,'Personal',null,null,null,null,'classify',255,'Small gas fill-up = personal'],
+    ['pers-007','Snappys gas ≤$25 → Personal','personal','contains','snappys',null,null,25,null,null,null,'Personal',null,null,null,null,'classify',256,'Small gas fill-up = personal'],
+    ['pers-008','Wildcat Express gas ≤$25 → Personal','personal','contains','wildcat express',null,null,25,null,null,null,'Personal',null,null,null,null,'classify',257,'Small gas fill-up = personal'],
 
     // ── P10 Conditional (400–499) ────────────────────────────────────────────
     ['p10-cond-001','Mon-Thu Restaurant ≥$95','p10_conditional','contains','conditional_restaurant','5829',95,null,'1,2,3,4',null,null,'Peak 10','Meals & Meetings - external',null,null,'⚠️ Add attendee names','classify',400,'Mon=1 Tue=2 Wed=3 Thu=4; Monarch category = Restaurants & Bars'],
