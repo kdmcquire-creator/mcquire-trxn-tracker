@@ -13,6 +13,7 @@ import { reclassifyAttExtras } from '../../electron/services/att-extra-repair'
 import { restoreReviewedExclusions } from '../../electron/services/reviewed-restore'
 import { remapP10Categories } from '../../electron/services/p10-category-cleanup'
 import { reclassifyGasUnder25 } from '../../electron/services/gas-personal-repair'
+import { reExcludeMigration018Duplicates } from '../../electron/services/migration018-dedup-repair'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Database initialization
@@ -755,6 +756,16 @@ function runMigrations(database: CompatDb): void {
     const { moved } = reclassifyGasUnder25(database)
     console.log(`[Migration 020] Moved ${moved} gas charges ≤ $25 from Peak 10 to Personal`)
     database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('020-gas-under-25-personal')
+  }
+
+  // Migration 021: migration 018 restored 48 de-duped charges; the bank later
+  // synced the same charges from a second source, so many now duplicate a live
+  // copy (cross-account, same amount, within 3 days). Re-exclude the 018-restored
+  // copy of each cross-account duplicate, keeping the twin. Idempotent.
+  if (!applied('021-reexclude-018-duplicates')) {
+    const { reExcluded } = reExcludeMigration018Duplicates(database)
+    console.log(`[Migration 021] Re-excluded ${reExcluded} cross-account duplicates restored by migration 018`)
+    database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('021-reexclude-018-duplicates')
   }
 }
 
