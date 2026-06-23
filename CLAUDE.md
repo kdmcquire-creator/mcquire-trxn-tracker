@@ -174,3 +174,25 @@ A full clean-uninstall script (removes app, AppData, Credential Manager entry, s
 ## 13. When updating this file
 
 Per the kdmcquire CLAUDE.md convention (event-driven): add a §9 symptom/cause/fix triplet whenever a non-obvious bug is fixed; update §11 timeline on each meaningful merge; flip §2/§10 status when a TODO ships; bump the date at top. Don't log formatting/typo/dep-bump-only changes. Keep secrets out.
+
+## 14. Trxn Trckr — the portable, shareable copy (started 2026-06-22)
+
+Kyle is creating a **scrubbed, renamed COPY** of this app to hand to 1-2 Peak 10 exec team members. This `mcquire-trxn-tracker` repo (his personal instance, "McQuire Tracker") is **NOT** changed by that effort — the copy is a separate codebase. Decisions locked 2026-06-22:
+
+- **Kyle's app keeps its name** ("McQuire Tracker") + identity, untouched. The **copy is renamed "Trxn Trckr"** (generic, unbranded — drops the "McQuire" name; appId/productName/UI/tray/menu/window-title/installer all rebranded).
+- **Distribution = SOURCE, not a built installer.** Execs get a zip/repo of the scrubbed source and run + modify it with **Claude Code** (which installs Node, builds, and makes their edits). Consequences: **no code-signing needed** (a locally-built app isn't SmartScreen-flagged), updates are owner-managed (each exec evolves their own copy), runs on any modern **Windows 10/11 x64 or ARM64** PC. Prereq for the exec: Claude Code (a Claude subscription) + Node (Claude Code can install it).
+- **Clean copy location: `C:/Projects/trxn-trckr`** (its own git repo).
+- **"Peak 10" is KEPT** (the execs ARE Peak 10 — shared employer, and the Peak 10 expense report is the shared value). **"Moonsmoke LLC" → a generic placeholder** (Kyle's personal S-corp). **"Kyle McQuire"/"CEO" → per-user values** (a setup "Your Details" step / settings default). Features are KEPT but genericized (not cut) so execs can trim via Claude Code.
+
+**The scrub (remove/genericize before sharing — surface verified by the 2026-06-22 portability workflow: 49 agents, 31 findings):**
+- `src/main/schema.ts` seed rules (~790-947): his vendors, account masks `5829/2255/9007`, phone `832-687-0468` → minimal generic seed (keep `excl-*` transfer exclusions + `default-001`; drop the vendor rules).
+- `electron/services/reviewed-restore.ts` (13-62): his 48 real reviewed transactions → removed (+ neutralize migration 018's use).
+- `electron/services/claude-classifier.ts` (108-141): AI system prompt naming him/entities/card/commute/restaurants (sent to Anthropic each call) → genericized.
+- `electron/services/expense-template-data.ts`: base64 .xlsx with his logo/signature → name/title from setup.
+- `schema.ts` (231,234-237): his NYC trip + reimbursement cutoff (the cutoff silently hides pre-date expenses) → seeded empty.
+- His name in `excel-export.ts` (91,164,404,525,531) + `financial-statements.service.ts` → per-user settings.
+- `SetupWizard.tsx:358`: his Chase masks in the connect-accounts copy → generic.
+- Drop the `companion-web` sub-app (a second copy of all of the above) from the share.
+- **Grep-gate before "done":** zero hits for `Kyle|McQuire|Moonsmoke|5829|2255|9007|832-687-0468|Bilt|Gexa|Eanes` across the copy.
+
+**Status: IN PROGRESS** — building the clean copy. Full plan + verified findings: the 2026-06-22 portability workflow output (`…/tasks/wjfm8q8p8.output`).
