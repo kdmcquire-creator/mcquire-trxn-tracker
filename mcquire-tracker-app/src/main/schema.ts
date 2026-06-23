@@ -796,6 +796,18 @@ function seedClassificationRules(database: CompatDb): void {
     // a vendor charge containing the word "payment" (e.g. Bilt rent) classifies
     // first; only unmatched genuine card payments fall through to this. See migration 015.
     ['excl-004','Payment Category Exclude','exclusion','contains','payment',null,null,null,null,null,null,'Exclude',null,null,null,null,'exclude',8999,'Demoted below vendor rules (migration 015) so vendor charges containing "payment" are not wrongly excluded'],
+    // Transfers / card-payments / cash-outs — USAA's abbreviated forms the plain
+    // "payment"/"transfer" rules miss. These are money moved between accounts, not
+    // expenses, so exclude them (esp. for the USAA statement PDF import). Early band.
+    ['excl-010','Zelle Transfer','exclusion','contains','zelle',null,null,null,null,null,null,'Exclude',null,null,null,null,'exclude',110,'P2P transfer, not an expense'],
+    ['excl-011','USAA Funds Transfer','exclusion','contains','funds transfer',null,null,null,null,null,null,'Exclude',null,null,null,null,'exclude',111,'Inter-account transfer'],
+    ['excl-012','External Transfer (XFER)','exclusion','contains','extrl xfer',null,null,null,null,null,null,'Exclude',null,null,null,null,'exclude',112,'External bank transfer'],
+    ['excl-013','External Transfer (Trnsfr)','exclusion','contains','ext trnsfr',null,null,null,null,null,null,'Exclude',null,null,null,null,'exclude',113,'External bank transfer'],
+    ['excl-014','Wire Transfer','exclusion','contains','wire transfer',null,null,null,null,null,null,'Exclude',null,null,null,null,'exclude',114,'Wire in/out, not an expense'],
+    ['excl-015','Credit Card Autopay','exclusion','contains','crd autopay',null,null,null,null,null,null,'Exclude',null,null,null,null,'exclude',115,'Card autopay = transfer'],
+    ['excl-016','Apple/GS Bank Card Payment','exclusion','contains','gsbank',null,null,null,null,null,null,'Exclude',null,null,null,null,'exclude',116,'Apple Card payment via Goldman Sachs'],
+    ['excl-017','Venmo Cashout','exclusion','contains','cashout',null,null,null,null,null,null,'Exclude',null,null,null,null,'exclude',117,'Venmo cash-out = transfer in'],
+    ['excl-018','Online Bill Payment','exclusion','contains','online pmt',null,null,null,null,null,null,'Exclude',null,null,null,null,'exclude',118,'Online bill/card payment = transfer'],
 
     // ── LLC Always (200–299) ─────────────────────────────────────────────────
     ['llc-001','Gexa Energy','llc_always','contains','gexa energy',null,null,null,null,null,null,'Moonsmoke LLC',null,'Utilities - Home Office',null,null,'classify',200,'Houston apt electricity'],

@@ -8,9 +8,10 @@ import Reports from "./screens/Reports"
 import Investments from "./screens/Investments"
 import Settings from "./screens/Settings/index"
 import AttBills from "./screens/AttBills"
+import ImportStatement from "./screens/ImportStatement"
 import SetupWizard from "./screens/SetupWizard"
 
-export type Screen = "dashboard" | "review" | "transactions" | "reports" | "attbills" | "investments" | "settings"
+export type Screen = "dashboard" | "review" | "transactions" | "reports" | "attbills" | "importstatement" | "investments" | "settings"
 
 /* ── Toast notification system ─────────────────────────────────────────────── */
 interface Toast {
@@ -141,6 +142,7 @@ export default function App() {
     transactions: <ErrorBoundary fallbackLabel="Transactions"><Transactions /></ErrorBoundary>,
     reports: <ErrorBoundary fallbackLabel="Reports"><Reports /></ErrorBoundary>,
     attbills: <ErrorBoundary fallbackLabel="AT&T Bills"><AttBills /></ErrorBoundary>,
+    importstatement: <ErrorBoundary fallbackLabel="Import Statement"><ImportStatement /></ErrorBoundary>,
     investments: <ErrorBoundary fallbackLabel="Investments"><Investments /></ErrorBoundary>,
     settings: <ErrorBoundary fallbackLabel="Settings"><Settings /></ErrorBoundary>,
   }

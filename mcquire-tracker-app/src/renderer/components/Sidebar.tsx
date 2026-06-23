@@ -12,6 +12,7 @@ const ITEMS: { id: Screen; label: string; icon: string }[] = [
   { id: "transactions", label: "Transactions",  icon: "💳" },
   { id: "reports",      label: "Reports",       icon: "📁" },
   { id: "attbills",     label: "AT&T Bills",    icon: "📱" },
+  { id: "importstatement", label: "Import Statement", icon: "🏦" },
   { id: "investments",  label: "Investments",   icon: "📈" },
   { id: "settings",     label: "Settings",      icon: "⚙️" },
 ]

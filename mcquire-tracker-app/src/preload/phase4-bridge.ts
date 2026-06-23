@@ -27,6 +27,9 @@ export const importBridge = {
   selectFile: () => ipcRenderer.invoke('import:select-file'),
   preview:    (filePath: string) => ipcRenderer.invoke('import:preview', filePath),
   run:        (filePath: string) => ipcRenderer.invoke('import:run', filePath),
+  usaaPdfPick:    () => ipcRenderer.invoke('import:usaa-pdf-pick'),
+  usaaPdfPreview: (filePath: string) => ipcRenderer.invoke('import:usaa-pdf-preview', filePath),
+  usaaPdfRun:     (filePaths: string[]) => ipcRenderer.invoke('import:usaa-pdf-run', filePaths),
   onProgress: (callback: (data: any) => void) => {
     ipcRenderer.on('import:progress', (_event, data) => callback(data))
     return () => ipcRenderer.removeAllListeners('import:progress')

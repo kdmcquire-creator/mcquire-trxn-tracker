@@ -16,7 +16,8 @@ import type { CompatDb } from './database'
 import { v4 as uuidv4 } from 'uuid'
 import { ipcMain, dialog } from 'electron'
 import { normalizeMerchant, hashRow, classifyTransaction, loadActiveRules } from './classification-engine'
-import { isCrossAccountDuplicate } from './dedup'
+import { isCrossAccountDuplicate, matchStatementDuplicates, type ExistingRow } from './dedup'
+import { parseUSAAStatement } from './usaa-statement-parser'
 
 // ─── Monarch CSV column mapping ───────────────────────────────────────────────
 // Monarch export columns: Date, Merchant, Category, Account, Original Statement,
@@ -62,6 +63,19 @@ export interface ImportProgress {
   queued: number
   excluded: number
   duplicates: number
+  errors: string[]
+}
+
+export interface StatementPreview {
+  accountMask: string | null
+  accountFound: boolean
+  periodStart: string | null
+  periodEnd: string | null
+  total: number
+  duplicates: number
+  newClassified: number   // new rows that classify to a real bucket
+  newExcluded: number     // new rows the classifier excludes (transfers/payments)
+  reconciles: boolean     // parsed totals match the statement Activity Summary
   errors: string[]
 }
 
@@ -365,6 +379,104 @@ export class HistoricalImportService {
     return { imported, classified, queued, errors }
   }
 
+  // ─── USAA statement PDF import ───────────────────────────────────────────────
+  // The parser (usaa-statement-parser) yields the same ParsedRow shape as the CSV
+  // path; here we resolve the account, dedup against existing same-account rows
+  // (statement re-imports), classify, and insert. Transfers/payments classify to
+  // Exclude (per Kyle) so the ledger is complete but they aren't counted.
+
+  private existingForDedup(accountId: string): ExistingRow[] {
+    return this.db.prepare(
+      `SELECT id, amount, transaction_date, COALESCE(merchant_name,'') || ' ' || COALESCE(description_raw,'') AS text
+       FROM transactions WHERE account_id = ? AND COALESCE(is_split_child,0) = 0`
+    ).all(accountId) as ExistingRow[]
+  }
+
+  private accountByMask(mask: string): { id: string } | null {
+    const a = this.db.prepare("SELECT id FROM accounts WHERE account_mask = ? AND is_active = 1 LIMIT 1").get(mask) as { id: string } | undefined
+    return a ? { id: a.id } : null
+  }
+
+  private reconciles(stmt: ReturnType<typeof parseUSAAStatement>): boolean {
+    const { totalDebits, totalCredits } = stmt.summary
+    if (totalDebits == null || totalCredits == null) return false
+    const debits = stmt.rows.filter(r => r.amount > 0).reduce((s, r) => s + r.amount, 0)
+    const credits = stmt.rows.filter(r => r.amount < 0).reduce((s, r) => s - r.amount, 0)
+    return Math.abs(debits - totalDebits) < 0.01 && Math.abs(credits - totalCredits) < 0.01
+  }
+
+  async previewUSAAStatement(text: string): Promise<StatementPreview> {
+    const stmt = parseUSAAStatement(text)
+    const acct = stmt.accountMask ? this.accountByMask(stmt.accountMask) : null
+    const existing = acct ? this.existingForDedup(acct.id) : []
+    const dupFlags = matchStatementDuplicates(stmt.rows, existing)
+    const rules = loadActiveRules(this.db)
+
+    let duplicates = 0, newClassified = 0, newExcluded = 0
+    stmt.rows.forEach((row, i) => {
+      if (dupFlags[i]) { duplicates++; return }
+      const r = classifyTransaction(
+        { description_raw: row.description_raw, amount: row.amount, transaction_date: row.transaction_date, account_mask: stmt.accountMask ?? '' },
+        rules, this.db
+      )
+      if (r.bucket === 'Exclude') newExcluded++; else newClassified++
+    })
+
+    return {
+      accountMask: stmt.accountMask, accountFound: !!acct,
+      periodStart: stmt.periodStart, periodEnd: stmt.periodEnd,
+      total: stmt.rows.length, duplicates, newClassified, newExcluded,
+      reconciles: this.reconciles(stmt),
+      errors: stmt.rows.length === 0 ? ['No transactions found — is this a USAA checking statement?'] : [],
+    }
+  }
+
+  async importUSAAStatement(text: string): Promise<{ imported: number; duplicates: number; excluded: number; classified: number }> {
+    const stmt = parseUSAAStatement(text)
+    if (!stmt.accountMask) throw new Error('Could not read the account number from the statement.')
+
+    let acctId = this.accountByMask(stmt.accountMask)?.id
+    if (!acctId) {
+      acctId = uuidv4()
+      this.db.prepare(
+        `INSERT OR IGNORE INTO accounts (id, institution, account_name, account_mask, account_type, entity,
+           default_bucket, import_method, is_active, created_at)
+         VALUES (?, 'USAA', ?, ?, 'checking', 'Personal', 'Personal', 'statement_pdf', 1, datetime('now'))`
+      ).run(acctId, `USAA Checking (…${stmt.accountMask})`, stmt.accountMask)
+    }
+
+    const existing = this.existingForDedup(acctId)
+    const dupFlags = matchStatementDuplicates(stmt.rows, existing)
+    const rules = loadActiveRules(this.db)
+    const insert = this.db.prepare(
+      `INSERT OR IGNORE INTO transactions
+        (id, account_id, plaid_transaction_id, source_row_hash, transaction_date, posting_date,
+         description_raw, merchant_name, amount, category_source, bucket, p10_category, llc_category,
+         description_notes, rule_id, review_status, flag_reason, split_parent_id, is_split_child,
+         period_label, expense_report_id, created_at, updated_at)
+       VALUES (?, ?, NULL, ?, ?, NULL, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, NULL, 0, NULL, NULL, datetime('now'), datetime('now'))`
+    )
+
+    let imported = 0, duplicates = 0, excluded = 0, classified = 0
+    this.db.transaction(() => {
+      stmt.rows.forEach((row, i) => {
+        if (dupFlags[i]) { duplicates++; return }
+        if (this.db.prepare('SELECT id FROM transactions WHERE source_row_hash = ?').get(row.source_row_hash)) { duplicates++; return }
+        const c = classifyTransaction(
+          { description_raw: row.description_raw, amount: row.amount, transaction_date: row.transaction_date, account_mask: stmt.accountMask! },
+          rules, this.db
+        )
+        insert.run(uuidv4(), acctId, row.source_row_hash, row.transaction_date, row.description_raw,
+          normalizeMerchant(row.description_raw), row.amount, c.bucket, c.p10_category, c.llc_category,
+          c.description_notes, c.rule_id, c.review_status, c.flag_reason)
+        imported++
+        if (c.bucket === 'Exclude') excluded++; else if (c.bucket) classified++
+      })
+    })()
+
+    return { imported, duplicates, excluded, classified }
+  }
+
   // ─── Helper methods ───────────────────────────────────────────────────────────
 
   /**
@@ -538,6 +650,47 @@ export function registerHistoricalImportHandlers(
         }
       })
       return { success: true, data: result }
+    } catch (err: any) {
+      return { success: false, error: err.message }
+    }
+  })
+
+  // ── USAA statement PDF import ──────────────────────────────────────────────
+  // pdf-parse must be required from /lib (the package index has a debug block
+  // that reads a sample PDF and throws in a bundled context).
+  const extractPdfText = async (filePath: string): Promise<string> => {
+    const pdf = require('pdf-parse/lib/pdf-parse.js')
+    return (await pdf(fs.readFileSync(filePath))).text as string
+  }
+
+  ipcMain.handle('import:usaa-pdf-pick', async () => {
+    const win = getMainWindow()
+    const result = await dialog.showOpenDialog(win!, {
+      title: 'Select USAA Statement PDF(s)',
+      filters: [{ name: 'PDF Statements', extensions: ['pdf'] }],
+      properties: ['openFile', 'multiSelections'],
+    })
+    if (result.canceled) return { success: false }
+    return { success: true, data: result.filePaths }
+  })
+
+  ipcMain.handle('import:usaa-pdf-preview', async (_e, filePath: string) => {
+    try {
+      return { success: true, data: await service.previewUSAAStatement(await extractPdfText(filePath)) }
+    } catch (err: any) {
+      return { success: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('import:usaa-pdf-run', async (_e, filePaths: string[]) => {
+    try {
+      const totals = { imported: 0, duplicates: 0, excluded: 0, classified: 0 }
+      for (const fp of filePaths) {
+        const r = await service.importUSAAStatement(await extractPdfText(fp))
+        totals.imported += r.imported; totals.duplicates += r.duplicates
+        totals.excluded += r.excluded; totals.classified += r.classified
+      }
+      return { success: true, data: totals }
     } catch (err: any) {
       return { success: false, error: err.message }
     }
