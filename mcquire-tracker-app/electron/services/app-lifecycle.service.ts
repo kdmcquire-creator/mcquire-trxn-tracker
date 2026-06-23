@@ -11,6 +11,7 @@ import { autoUpdater } from 'electron-updater'
 import * as path from 'path'
 import * as fs from 'fs'
 import * as cron from 'node-cron'
+import { evaluateLock } from './lock-eval'
 
 export class AppLifecycleService {
   private static instance: AppLifecycleService | null = null
@@ -55,16 +56,13 @@ export class AppLifecycleService {
 
     if (fs.existsSync(this.lockPath)) {
       try {
-        const lockContent = fs.readFileSync(this.lockPath, 'utf-8')
-        const lockData = JSON.parse(lockContent)
-        const lockAge = Date.now() - new Date(lockData.timestamp).getTime()
-
-        // Lock older than 10 minutes is likely stale (app crashed without cleanup)
-        if (lockAge < 10 * 60 * 1000) {
+        const lockData = JSON.parse(fs.readFileSync(this.lockPath, 'utf-8'))
+        if (evaluateLock(lockData, require('os').hostname(), Date.now()) === 'conflict') {
+          // A recent lock from ANOTHER machine — genuine "open elsewhere" conflict.
           lockConflict = true
           lockInfo = `Lock created by ${lockData.hostname} at ${new Date(lockData.timestamp).toLocaleString()}`
         } else {
-          // Stale lock — remove it
+          // Stale, or from this same machine — reclaim it silently (no banner).
           fs.unlinkSync(this.lockPath)
         }
       } catch {
