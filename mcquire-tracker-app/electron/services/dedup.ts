@@ -71,3 +71,59 @@ export function isCrossAccountDuplicate(db: CompatDb, candidate: DedupCandidate)
 
   return match.n >= 1
 }
+
+// ── Statement re-import dedup (same account, fuzzy) ──────────────────────────
+//
+// The checks above can't catch a PDF statement re-imported into the SAME account
+// that already holds those charges (from CSV/Plaid) with differently-formatted
+// descriptions: the source hash differs and isCrossAccountDuplicate only looks at
+// OTHER accounts. So match each parsed row to at most one existing same-account
+// row by exact amount + near date + a shared significant description token.
+
+const STMT_NOISE = new Set([
+  'pos', 'debit', 'credit', 'ach', 'withdrawal', 'deposit', 'dep', 'payment', 'pmt',
+  'transfer', 'xfer', 'card', 'purchase', 'visa', 'direct', 'online', 'funds', 'usaa',
+  'iod', 'the', 'and', 'for', 'from', 'www', 'com', 'llc', 'inc',
+])
+
+/** Significant lowercase tokens of a bank description: drops transaction-type
+ *  noise, pure numbers (refs/dates/masks), and short tokens. */
+export function statementTokens(text: string): Set<string> {
+  const out = new Set<string>()
+  for (const t of (text || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/)) {
+    if (t.length < 3 || /^\d+$/.test(t) || STMT_NOISE.has(t)) continue
+    out.add(t)
+  }
+  return out
+}
+
+export interface StatementRow { amount: number; transaction_date: string; description_raw: string }
+export interface ExistingRow { id: string; amount: number; transaction_date: string; text: string }
+
+const daysApart = (a: string, b: string) => Math.abs((Date.parse(a) - Date.parse(b)) / 86_400_000)
+
+/** For each parsed statement row, true if it duplicates an EXISTING same-account
+ *  row — claiming each existing row at most once, so two genuinely-identical
+ *  charges (e.g. two $150 payments the same day) still both import. Order-preserving. */
+export function matchStatementDuplicates(
+  parsed: StatementRow[],
+  existing: ExistingRow[],
+  windowDays = DEDUP_DATE_WINDOW_DAYS
+): boolean[] {
+  const claimed = new Set<string>()
+  const exTokens = existing.map(e => statementTokens(e.text))
+  return parsed.map(p => {
+    const pTok = statementTokens(p.description_raw)
+    for (let i = 0; i < existing.length; i++) {
+      const e = existing[i]
+      if (claimed.has(e.id) || e.amount !== p.amount) continue
+      if (daysApart(e.transaction_date, p.transaction_date) > windowDays) continue
+      let shared = false
+      for (const t of pTok) if (exTokens[i].has(t)) { shared = true; break }
+      if (!shared) continue
+      claimed.add(e.id)
+      return true
+    }
+    return false
+  })
+}

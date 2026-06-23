@@ -1,6 +1,6 @@
 {
   "name": "mcquire-tracker",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "McQuire Financial Tracker — Desktop Application",
   "main": "dist-electron/main/index.js",
   "author": "Kyle McQuire",
