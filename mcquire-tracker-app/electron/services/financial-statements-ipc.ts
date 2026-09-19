@@ -12,6 +12,10 @@ import {
   validateExpenseReportReadiness,
   generate1120SWorkbook,
 } from './excel-export'
+import {
+  listExpenseReports, latestReportInputs, markReportSubmitted, markReportPaid,
+  deleteReport, setReportArchived,
+} from './expense-report-manager'
 import * as path from 'path'
 
 export function registerFinancialStatementsHandlers(
@@ -189,7 +193,7 @@ export function registerFinancialStatementsHandlers(
       const notesData = JSON.parse(report.notes ?? '{}')
       const txIds: string[] = notesData.txIds ?? []
 
-      db.prepare("UPDATE expense_reports SET status = 'submitted' WHERE id = ?").run(reportId)
+      db.prepare("UPDATE expense_reports SET status = 'submitted', date_submitted = COALESCE(date_submitted, datetime('now')) WHERE id = ?").run(reportId)
 
       if (txIds.length > 0) {
         const upd = db.prepare("UPDATE transactions SET expense_report_id = ? WHERE id = ?")
@@ -216,6 +220,64 @@ export function registerFinancialStatementsHandlers(
     } catch (err: any) {
       return { success: false, error: err.message }
     }
+  })
+
+  // ── Report management: list / lifecycle / delete / archive / regenerate ──────
+  const parseNotes = (n: string | null): any => { try { return JSON.parse(n ?? '{}') } catch { return {} } }
+
+  ipcMain.handle('reports:list', () => {
+    try { return { success: true, data: listExpenseReports(db) } }
+    catch (err: any) { return { success: false, error: err.message } }
+  })
+
+  ipcMain.handle('reports:latest', () => {
+    try { return { success: true, data: latestReportInputs(db) } }
+    catch (err: any) { return { success: false, error: err.message } }
+  })
+
+  ipcMain.handle('reports:mark-submitted', (_e, reportId: string) => {
+    try { return { success: true, data: markReportSubmitted(db, reportId) } }
+    catch (err: any) { return { success: false, error: err.message } }
+  })
+
+  ipcMain.handle('reports:mark-paid', (_e, reportId: string) => {
+    try { return { success: true, data: markReportPaid(db, reportId) } }
+    catch (err: any) { return { success: false, error: err.message } }
+  })
+
+  ipcMain.handle('reports:delete', (_e, reportId: string) => {
+    try { deleteReport(db, reportId); return { success: true } }
+    catch (err: any) { return { success: false, error: err.message } }
+  })
+
+  ipcMain.handle('reports:set-archived', (_e, reportId: string, archived: boolean) => {
+    try { setReportArchived(db, reportId, archived); return { success: true } }
+    catch (err: any) { return { success: false, error: err.message } }
+  })
+
+  // Re-export the .xlsx for an existing report's stored date range and refresh the
+  // row in place (no new row). includeAlreadyReported so a submitted/paid report
+  // reproduces its own tagged rows instead of an empty file.
+  ipcMain.handle('reports:regenerate', async (_e, reportId: string) => {
+    try {
+      const r = db.prepare("SELECT report_period, notes FROM expense_reports WHERE id=?").get(reportId) as { report_period: string; notes: string } | undefined
+      if (!r) return { success: false, error: 'Report not found' }
+      const n = parseNotes(r.notes)
+      if (!n.dateFrom || !n.dateTo) return { success: false, error: 'This report has no stored date range to regenerate from.' }
+      const exportDir = path.join(getSyncFolder(), 'exports', 'expense_reports')
+      fs.mkdirSync(exportDir, { recursive: true })
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19)
+      const outputPath = path.join(exportDir, `Peak10_ExpenseReport_${ts}.xlsx`)
+      const result = await generatePeak10ExpenseReport(db, n.dateFrom, n.dateTo, r.report_period, outputPath, { includeAlreadyReported: true })
+      // generate() inserted a fresh draft row; fold its results into the existing row and drop the temp.
+      const temp = db.prepare("SELECT notes FROM expense_reports WHERE id=?").get(result.report_id) as { notes: string } | undefined
+      db.transaction(() => {
+        db.prepare("UPDATE expense_reports SET file_path=?, total_amount=?, transaction_count=?, date_generated=datetime('now'), notes=? WHERE id=?")
+          .run(outputPath, result.total, result.count, temp?.notes ?? r.notes, reportId)
+        db.prepare("DELETE FROM expense_reports WHERE id=?").run(result.report_id)
+      })()
+      return { success: true, data: { filePath: outputPath, total: result.total, count: result.count } }
+    } catch (err: any) { return { success: false, error: err.message } }
   })
 
   // ── 1120-S / K-1 generation ─────────────────────────────────────────────────

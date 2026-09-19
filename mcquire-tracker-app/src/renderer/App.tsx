@@ -243,6 +243,13 @@ declare global {
         checkOverlap: (payload: { dateFrom: string; dateTo: string }) => Promise<any>
         confirmSubmitted: (reportId: string) => Promise<any>
         generate1120S: (inputs: any) => Promise<any>
+        list: () => Promise<any>
+        latest: () => Promise<any>
+        markSubmitted: (reportId: string) => Promise<any>
+        markPaid: (reportId: string) => Promise<any>
+        remove: (reportId: string) => Promise<any>
+        setArchived: (reportId: string, archived: boolean) => Promise<any>
+        regenerate: (reportId: string) => Promise<any>
       }
       attBills: {
         pick: () => Promise<any>
