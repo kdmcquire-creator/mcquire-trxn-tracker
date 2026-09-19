@@ -52,6 +52,22 @@ function applySplit(db: CompatDb, billId: string, targetId: string, line0468: nu
   })()
 }
 
+/** Apply a combination match: the bill was paid across several ACH drafts. Carve the
+ *  0468 business line out of the largest ("carrier") draft (→ Peak 10 / rest → Personal)
+ *  and book the other drafts entirely to Personal. Net: exactly line0468 → Peak 10. */
+function applyCombo(db: CompatDb, billId: string, carrierId: string, line0468: number, personalFromCarrier: number, personalIds: string[]): void {
+  const toPersonal = db.prepare(`UPDATE transactions SET bucket='Personal', p10_category=NULL, llc_category=NULL,
+      review_status='manually_classified', flag_reason=?, updated_at=datetime('now') WHERE id=?`)
+  db.transaction(() => {
+    for (const pid of personalIds) toPersonal.run(`AT&T bill paid across multiple ACH drafts — business line split onto ${carrierId}`, pid)
+    splitTransaction(db, carrierId, [
+      { bucket: 'Peak 10', amount: line0468, p10_category: P10_TELECOM },
+      { bucket: 'Personal', amount: personalFromCarrier },
+    ])
+    db.prepare(`UPDATE att_bills SET status='split', matched_txn_id=?, updated_at=datetime('now') WHERE id=?`).run(carrierId, billId)
+  })()
+}
+
 function toParsed(bill: AttBillRow): ParsedAttBill {
   return {
     accountNumber: bill.account_number, issueDate: bill.issue_date,
@@ -62,6 +78,7 @@ function toParsed(bill: AttBillRow): ParsedAttBill {
 function tryMatchAndApply(db: CompatDb, bill: AttBillRow): 'split' | 'pending' | 'review' {
   const m = matchBillToCharge(toParsed(bill), attChargeCandidates(db))
   if (m.action === 'split') { applySplit(db, bill.id, m.targetId, m.line0468, m.remainder, m.duplicateIds); return 'split' }
+  if (m.action === 'split-combo') { applyCombo(db, bill.id, m.carrierId, m.line0468, m.personalFromCarrier, m.personalIds); return 'split' }
   const next = m.action === 'review' ? 'review' : 'pending'
   if (bill.status !== next) db.prepare(`UPDATE att_bills SET status=?, updated_at=datetime('now') WHERE id=?`).run(next, bill.id)
   return next
