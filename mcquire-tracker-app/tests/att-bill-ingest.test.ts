@@ -55,4 +55,28 @@ describe('AT&T bill ingest', () => {
     expect(ingestParsedBill(db, bill, 'Apr-copy.pdf').outcome).toBe('duplicate-upload')
     expect(listAttBills(db)).toHaveLength(1)
   })
+
+  // Option C: a bill paid across two ACH drafts ($414.30 + $602.86 = $1,017.16).
+  it('splits a multi-draft bill: 0468 out of the largest draft, the other → Personal', () => {
+    const may: ParsedAttBill = {
+      accountNumber: '287301218152', issueDate: '2026-05-27', autopayDate: '2026-06-20',
+      billTotal: 1017.16, line0468Amount: 91.77,
+    }
+    addCharge(db, 'd1', 414.30, '2026-06-09')
+    addCharge(db, 'd2', 602.86, '2026-06-22')
+    expect(ingestParsedBill(db, may, 'May.pdf').outcome).toBe('split')
+
+    // carrier d2 (the larger) is split into the 0468 line + its own remainder
+    const kids = db.prepare("SELECT bucket, p10_category, amount FROM transactions WHERE split_parent_id='d2' ORDER BY amount DESC").all() as any[]
+    expect(kids).toHaveLength(2)
+    expect(kids[0]).toMatchObject({ bucket: 'Personal', amount: 511.09 })            // 602.86 − 91.77
+    expect(kids[1]).toMatchObject({ bucket: 'Peak 10', p10_category: 'Telephone & Communication', amount: 91.77 })
+    // the other draft is booked entirely to Personal
+    expect((db.prepare("SELECT bucket, review_status FROM transactions WHERE id='d1'").get() as any))
+      .toMatchObject({ bucket: 'Personal', review_status: 'manually_classified' })
+    expect(listAttBills(db)[0]).toMatchObject({ status: 'split', matched_txn_id: 'd2' })
+    // net: Peak 10 gets exactly the 0468 line; everything else Personal
+    const peak = db.prepare("SELECT COALESCE(SUM(amount),0) AS s FROM transactions WHERE bucket='Peak 10' AND is_split_child=1").get() as any
+    expect(peak.s).toBe(91.77)
+  })
 })

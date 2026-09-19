@@ -44,3 +44,45 @@ describe('AT&T bill → charge matcher', () => {
       .toEqual({ action: 'pending' })
   })
 })
+
+// Option C: a bill paid across several ACH drafts (e.g. a device-upgrade month).
+describe('AT&T bill → multi-draft combination (Option C)', () => {
+  // May 2026: $1,017.16 was drafted as $414.30 (6/09) + $602.86 (6/22).
+  const may: ParsedAttBill = {
+    accountNumber: '287301218152', issueDate: '2026-05-27', autopayDate: '2026-06-20',
+    billTotal: 1017.16, line0468Amount: 91.77,
+  }
+
+  it('splits the 0468 line out of the largest draft; the rest → Personal', () => {
+    const m = matchBillToCharge(may, [charge('c1', 414.30, '2026-06-09'), charge('c2', 602.86, '2026-06-22')])
+    expect(m).toEqual({
+      action: 'split-combo',
+      carrierId: 'c2',                 // the larger draft carries the split
+      line0468: 91.77,
+      personalFromCarrier: 511.09,     // 602.86 − 91.77
+      personalIds: ['c1'],             // the other draft → Personal in full
+    })
+  })
+
+  it('prefers a single exact-total charge over a combination', () => {
+    const m = matchBillToCharge(may, [
+      charge('single', 1017.16, '2026-06-20'),
+      charge('c1', 414.30, '2026-06-09'), charge('c2', 602.86, '2026-06-22'),
+    ])
+    expect(m).toMatchObject({ action: 'split', targetId: 'single' })
+  })
+
+  it('stays pending when a draft is outside the window (no complete sum)', () => {
+    const m = matchBillToCharge(may, [charge('c1', 414.30, '2026-06-09'), charge('c2', 602.86, '2026-08-01')])
+    expect(m).toEqual({ action: 'pending' })
+  })
+
+  it('stays pending when two different combinations both sum to the total (ambiguous)', () => {
+    const amb: ParsedAttBill = { ...may, billTotal: 250, line0468Amount: 40 }
+    const m = matchBillToCharge(amb, [
+      charge('a', 100, '2026-06-01'), charge('b', 150, '2026-06-05'),
+      charge('c', 90, '2026-06-09'), charge('d', 160, '2026-06-13'),
+    ])
+    expect(m).toEqual({ action: 'pending' })
+  })
+})
