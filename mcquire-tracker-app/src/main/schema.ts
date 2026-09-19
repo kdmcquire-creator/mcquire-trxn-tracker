@@ -836,6 +836,10 @@ function seedClassificationRules(database: CompatDb): void {
     // AT&T mobility (same wireless account, banded like the bill) + U-verse consumer. See migration 017.
     ['llc-022','AT&T Mobility <$100','llc_always','contains','at&t mobility','5829',null,99.99,null,null,null,'Moonsmoke LLC',null,'Telephone - Business Line',null,null,'classify',221,'AT&T mobility business line — see migration 017'],
     ['llc-023','AT&T U-verse Consumer','llc_always','contains','uverse cons',null,null,null,null,null,null,'Moonsmoke LLC',null,'Utilities - Home Office',null,null,'classify',222,'UVERSE CONS SW EVR → Moonsmoke LLC (Kyle) — see migration 017'],
+    // AT&T wireless autopay now drafts from CHECKING as an ACH "ATT PAYMENT" (not the
+    // 5829 card). Match 'att payment' on ANY account (account_mask_filter = null) so the
+    // bill is caught wherever it drafts. Small band → business line. Added 2026-09-19.
+    ['llc-024','AT&T Payment ACH <$100','llc_always','contains','att payment',null,null,99.99,null,null,null,'Moonsmoke LLC',null,'Telephone - Business Line',null,null,'classify',223,'AT&T ACH autopay from checking, small line — added 2026-09-19'],
 
     // ── P10 Always (300–399) ─────────────────────────────────────────────────
     ['p10-001','Park House Houston','p10_always','contains','park house',null,null,null,null,null,null,'Peak 10','Meals & Meetings - external',null,null,null,'classify',300,''],
@@ -882,6 +886,11 @@ function seedClassificationRules(database: CompatDb): void {
     ['p10-040','AT&T Mobility $100-299','p10_always','contains','at&t mobility','5829',100,299.99,null,null,null,'Peak 10','Telephone & Communication',null,null,null,'classify',339,'AT&T mobility work line — see migration 017'],
     ['p10-041','AT&T Mobility >=$300 Split','p10_always','contains','at&t mobility','5829',300,null,null,null,null,'Peak 10','Telephone & Communication',null,'⚠️ AT&T split required — pull 832-687-0468 business line cost from att.com','split_flag',340,'Combined AT&T mobility bill — split; see migration 017'],
     ['p10-042','AT&T Business U-verse','p10_always','contains','business uverse',null,null,null,null,null,null,'Peak 10','Telephone & Communication',null,null,null,'classify',341,'ATT BUSINESS UVERSE → Peak 10 (Kyle) — see migration 017'],
+    // AT&T wireless autopay ACH "ATT PAYMENT" from checking, mid/large bands, ANY account.
+    // ≥$300 is split_flagged so the AT&T-bill PDF matcher can auto-split it (0468 → Peak 10,
+    // rest → Personal); drafts that don't match a bill land in the Review Queue. Added 2026-09-19.
+    ['p10-043','AT&T Payment ACH $100-299','p10_always','contains','att payment',null,100,299.99,null,null,null,'Peak 10','Telephone & Communication',null,null,null,'classify',342,'AT&T ACH autopay from checking, work line — added 2026-09-19'],
+    ['p10-044','AT&T Payment ACH >=$300 Split','p10_always','contains','att payment',null,300,null,null,null,null,'Peak 10','Telephone & Communication',null,null,'⚠️ AT&T split required — pull 832-687-0468 business line cost from att.com','split_flag',343,'AT&T ACH autopay combined bill — split work line vs personal; added 2026-09-19'],
 
     // ── Personal — gas fill-ups ≤ $25 (run BEFORE the P10 gas rules at 331+) ──
     // A gas charge over $25 falls through to the P10 gas rule and stays Peak 10

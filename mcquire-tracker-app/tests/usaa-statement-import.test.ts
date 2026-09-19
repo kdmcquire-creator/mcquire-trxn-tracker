@@ -70,3 +70,40 @@ describe('USAA statement import', () => {
     expect(again).toMatchObject({ imported: 0, duplicates: 3 })
   })
 })
+
+// A dormant account (is_active = 0) must still be recognized by its mask — e.g. the
+// USAA checking …8178 that went inactive when the other accounts moved to Plaid, and
+// which the AT&T autopay drafts from. Import maps to it (no duplicate) and re-activates it.
+describe('USAA statement import — dormant account by mask', () => {
+  let db: CompatDb
+  let svc: HistoricalImportService
+  beforeEach(async () => {
+    db = await makeDb()
+    applyCoreSchema(db); applyRulesSchema(db)
+    // …8178 exists but is dormant (is_active = 0)
+    db.prepare(`INSERT INTO accounts (id, institution, account_name, account_mask, account_type, entity, default_bucket, is_active)
+      VALUES ('usaa8178','USAA','Main Checking (...8178)','8178','checking','Personal','Personal',0)`).run()
+    db.prepare(`INSERT INTO rules (id, rule_name, section, match_type, match_value, bucket, action, priority_order, is_active)
+      VALUES ('def','Default','default','contains','','Personal','classify',9000,1)`).run()
+    ;(HistoricalImportService as any).instance = null
+    svc = HistoricalImportService.getInstance(db)
+  })
+
+  it('preview recognizes the dormant …8178 account', async () => {
+    const p = await svc.previewUSAAStatement(STMT)
+    expect(p).toMatchObject({ accountMask: '8178', accountFound: true })
+  })
+
+  it('import maps into the existing …8178 (no duplicate account) and re-activates it', async () => {
+    const res = await svc.importUSAAStatement(STMT)
+    expect(res.imported).toBeGreaterThan(0)
+
+    const accts = db.prepare("SELECT id, is_active FROM accounts WHERE account_mask = '8178'").all() as Array<{ id: string; is_active: number }>
+    expect(accts).toHaveLength(1)                 // no duplicate spawned
+    expect(accts[0].id).toBe('usaa8178')
+    expect(accts[0].is_active).toBe(1)            // re-activated
+
+    const onOther = db.prepare("SELECT COUNT(*) AS n FROM transactions WHERE account_id != 'usaa8178'").get() as { n: number }
+    expect(onOther.n).toBe(0)                     // everything imported onto the real account
+  })
+})
