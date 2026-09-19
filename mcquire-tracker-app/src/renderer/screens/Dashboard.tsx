@@ -8,7 +8,7 @@ function unwrap<T>(res: any, fallback: T): T {
 }
 
 interface BucketData {
-  peak10: { count: number; total: number }
+  peak10: { count: number; total: number; outstanding?: number; reimbursed?: number }
   llc: { count: number; total: number }
   personal: { income: number; expenses: number; count: number }
   pending_review: number
@@ -53,7 +53,7 @@ export default function Dashboard({ onNavigate }: Props) {
         const llc = totalsMap["Moonsmoke LLC"] ?? { total: 0, count: 0 }
         const pers = totalsMap["Personal"] ?? { total: 0, count: 0 }
         setBuckets({
-          peak10: { count: p10.count, total: p10.total },
+          peak10: { count: p10.count, total: p10.total, outstanding: (p10 as any).outstanding, reimbursed: (p10 as any).reimbursed },
           llc: { count: llc.count, total: llc.total },
           personal: { count: pers.count, expenses: pers.total, income: 0 },
           pending_review: 0,
@@ -180,7 +180,7 @@ export default function Dashboard({ onNavigate }: Props) {
   if (loading) return <div className="p-8 text-gray-500">Loading...</div>
 
   const b = {
-    peak10: { count: buckets?.peak10?.count ?? 0, total: buckets?.peak10?.total ?? 0 },
+    peak10: { count: buckets?.peak10?.count ?? 0, total: buckets?.peak10?.total ?? 0, outstanding: buckets?.peak10?.outstanding, reimbursed: buckets?.peak10?.reimbursed },
     llc: { count: buckets?.llc?.count ?? 0, total: buckets?.llc?.total ?? 0 },
     personal: { income: buckets?.personal?.income ?? 0, expenses: buckets?.personal?.expenses ?? 0, count: buckets?.personal?.count ?? 0 },
     pending_review: buckets?.pending_review ?? 0,
@@ -289,9 +289,14 @@ export default function Dashboard({ onNavigate }: Props) {
       <div className="grid grid-cols-3 gap-4 mb-6">
         <div className="card border-l-4 border-brand-blue">
           <div className="text-xs font-semibold text-brand-blue uppercase mb-1">🏢 Peak 10 (W2)</div>
-          <div className="text-2xl font-bold text-gray-900">{fmt(b.peak10.total)}</div>
-          <div className="text-sm text-gray-500 mt-1">{b.peak10.count} transactions</div>
-          <div className="text-xs text-gray-400 mt-1">Expense reimbursement pending</div>
+          <div className="text-2xl font-bold text-gray-900">{fmt(b.peak10.outstanding ?? b.peak10.total)}</div>
+          <div className="text-xs text-gray-400 mt-1">
+            {b.peak10.outstanding != null ? "Outstanding reimbursement (not yet on a submitted report)" : "Total Peak 10"}
+          </div>
+          <div className="text-sm text-gray-500 mt-1">
+            {b.peak10.count} transactions · total {fmt(b.peak10.total)}
+            {b.peak10.reimbursed != null ? ` · reimbursed ${fmt(b.peak10.reimbursed)}` : ""}
+          </div>
         </div>
         <div className="card border-l-4 border-green-600">
           <div className="text-xs font-semibold text-green-700 uppercase mb-1">💼 Moonsmoke LLC</div>

@@ -62,6 +62,13 @@ contextBridge.exposeInMainWorld('api', {
     checkOverlap:                (payload: { dateFrom: string; dateTo: string })  => ipcRenderer.invoke('reports:check-overlap', payload),
     confirmSubmitted:            (reportId: string)                               => ipcRenderer.invoke('reports:confirm-submitted', reportId),
     generate1120S:               (inputs: any)                                    => ipcRenderer.invoke('reports:generate-1120s', inputs),
+    list:                        ()                                               => ipcRenderer.invoke('reports:list'),
+    latest:                      ()                                               => ipcRenderer.invoke('reports:latest'),
+    markSubmitted:               (reportId: string)                               => ipcRenderer.invoke('reports:mark-submitted', reportId),
+    markPaid:                    (reportId: string)                               => ipcRenderer.invoke('reports:mark-paid', reportId),
+    remove:                      (reportId: string)                               => ipcRenderer.invoke('reports:delete', reportId),
+    setArchived:                 (reportId: string, archived: boolean)            => ipcRenderer.invoke('reports:set-archived', reportId, archived),
+    regenerate:                  (reportId: string)                               => ipcRenderer.invoke('reports:regenerate', reportId),
   },
 
   // ── AT&T bill auto-split ─────────────────────────────────────────────────────

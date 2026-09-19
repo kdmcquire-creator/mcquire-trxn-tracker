@@ -14,6 +14,7 @@ import { restoreReviewedExclusions } from '../../electron/services/reviewed-rest
 import { remapP10Categories } from '../../electron/services/p10-category-cleanup'
 import { reclassifyGasUnder25 } from '../../electron/services/gas-personal-repair'
 import { reExcludeMigration018Duplicates } from '../../electron/services/migration018-dedup-repair'
+import { dedupeExpenseReports } from '../../electron/services/expense-report-manager'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Database initialization
@@ -147,10 +148,13 @@ export async function initDatabase(folder: string): Promise<CompatDb> {
       report_period     TEXT NOT NULL,
       date_generated    TEXT NOT NULL,
       file_path         TEXT NOT NULL,
-      status            TEXT NOT NULL DEFAULT 'draft',
+      status            TEXT NOT NULL DEFAULT 'draft',   -- draft | submitted | paid
       total_amount      REAL NOT NULL DEFAULT 0,
       transaction_count INTEGER NOT NULL DEFAULT 0,
-      notes             TEXT NULL
+      notes             TEXT NULL,
+      date_submitted    TEXT NULL,
+      date_paid         TEXT NULL,
+      archived          INTEGER NOT NULL DEFAULT 0
     );
 
     -- Plaid items (one per institution connection)
@@ -766,6 +770,30 @@ function runMigrations(database: CompatDb): void {
     const { reExcluded } = reExcludeMigration018Duplicates(database)
     console.log(`[Migration 021] Re-excluded ${reExcluded} cross-account duplicates restored by migration 018`)
     database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('021-reexclude-018-duplicates')
+  }
+
+  // Migration 022: add the submitted/paid/archived columns to expense_reports on
+  // existing databases (fresh installs get them from the CREATE TABLE above).
+  if (!applied('022-expense-report-lifecycle-columns')) {
+    const cols = (database.prepare("PRAGMA table_info(expense_reports)").all() as Array<{ name: string }>).map(c => c.name)
+    if (!cols.includes('date_submitted')) database.prepare("ALTER TABLE expense_reports ADD COLUMN date_submitted TEXT NULL").run()
+    if (!cols.includes('date_paid')) database.prepare("ALTER TABLE expense_reports ADD COLUMN date_paid TEXT NULL").run()
+    if (!cols.includes('archived')) database.prepare("ALTER TABLE expense_reports ADD COLUMN archived INTEGER NOT NULL DEFAULT 0").run()
+    // Backfill date_submitted for rows already marked submitted (best-effort = date_generated).
+    database.prepare("UPDATE expense_reports SET date_submitted = date_generated WHERE status='submitted' AND date_submitted IS NULL").run()
+    console.log('[Migration 022] Added expense_reports lifecycle columns (date_submitted/date_paid/archived)')
+    database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('022-expense-report-lifecycle-columns')
+  }
+
+  // Migration 023: de-duplicate expense_reports. Re-generating the same period
+  // created multiple rows (drafts + superseded submits). For each report_period,
+  // keep one canonical row (most-advanced status, then a row whose transactions are
+  // actually tagged, then newest) and delete the OTHERS — but only rows that have
+  // NO transactions tagged to them, so nothing is orphaned. Idempotent.
+  if (!applied('023-dedupe-expense-reports')) {
+    const { deleted } = dedupeExpenseReports(database)
+    console.log(`[Migration 023] Removed ${deleted} duplicate/superseded expense_report rows (no tagged transactions)`)
+    database.prepare("INSERT OR IGNORE INTO migrations (id) VALUES (?)").run('023-dedupe-expense-reports')
   }
 }
 

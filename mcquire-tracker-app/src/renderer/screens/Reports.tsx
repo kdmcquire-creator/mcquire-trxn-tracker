@@ -69,6 +69,11 @@ export default function Reports() {
   const [lastGenerated, setLastGenerated] = useState<{ path: string; report: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  // Past-reports history
+  const [reportsList, setReportsList] = useState<any[]>([])
+  const [showArchived, setShowArchived] = useState(false)
+  const [busyReportId, setBusyReportId] = useState<string | null>(null)
+
   // 1120-S inputs
   const [taxYear, setTaxYear] = useState("2025")
   const [grossReceipts, setGrossReceipts] = useState("")
@@ -177,6 +182,31 @@ export default function Reports() {
     }
   }, [selectedReport])
 
+  const loadReports = useCallback(async () => {
+    try { setReportsList(unwrap<any[]>(await window.api.reports.list(), [])) } catch {}
+  }, [])
+
+  // On mount: default the generator inputs to the most recent report, and load history.
+  useEffect(() => {
+    (async () => {
+      try {
+        const latest = unwrap<{ periodLabel?: string; dateFrom?: string; dateTo?: string } | null>(await window.api.reports.latest(), null)
+        if (latest) {
+          if (latest.periodLabel) setPeriodLabel(latest.periodLabel)
+          if (latest.dateFrom) setDateFrom(latest.dateFrom)
+          if (latest.dateTo) setDateTo(latest.dateTo)
+        }
+      } catch {}
+      loadReports()
+    })()
+  }, [loadReports])
+
+  const doReport = useCallback(async (id: string, action: () => Promise<any>) => {
+    setBusyReportId(id)
+    try { await action() } catch (e: any) { alert("Action failed: " + (e?.message ?? "unknown")) }
+    finally { setBusyReportId(null); loadReports() }
+  }, [loadReports])
+
   const openBlockerModal = async () => {
     setShowBlockerModal(true)
     setLoadingBlockers(true)
@@ -254,6 +284,7 @@ export default function Reports() {
       const filePath: string = data?.filePath ?? data?.file_path ?? (typeof data === "string" ? data : "") ?? ""
       if (data !== null && data !== undefined) {
         setLastGenerated({ path: filePath, report: REPORT_TYPES.find(r => r.id === selectedReport)?.label ?? selectedReport! })
+        if (selectedReport === "expense_report") loadReports()
       } else {
         throw new Error("No result returned from generator")
       }
@@ -381,14 +412,6 @@ export default function Reports() {
                     </div>
                   )}
 
-                  {/* Known open items */}
-                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs text-slate-600">
-                    <p className="font-semibold mb-1">📋 Known open items:</p>
-                    <ul className="space-y-0.5">
-                      <li>• AT&T splits pending: Dec 26 ($478.91), Jan 20 ($478.20), Feb 20 ($463.73) — pull line 832-687-0468 from att.com/billdetail</li>
-                      <li>• Bari Houston Jan 6 ($955.63) — add attendee names before submitting</li>
-                    </ul>
-                  </div>
                 </div>
               )}
             </div>
@@ -506,6 +529,59 @@ export default function Reports() {
           Select a report type above to configure and generate
         </div>
       )}
+
+      {/* ── Past Expense Reports (audit / manage) ──────────────────────────── */}
+      <div className="mt-8">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-bold text-slate-800">Past Expense Reports</h2>
+          <label className="text-xs text-slate-500 flex items-center gap-1.5 cursor-pointer">
+            <input type="checkbox" checked={showArchived} onChange={e => setShowArchived(e.target.checked)} /> Show archived
+          </label>
+        </div>
+        {(() => {
+          const visible = reportsList.filter(r => showArchived || !r.archived)
+          if (visible.length === 0)
+            return <div className="text-sm text-slate-400 bg-slate-50 border border-slate-200 rounded-xl p-6 text-center">No expense reports generated yet.</div>
+          return (
+            <div className="space-y-2">
+              {visible.map(r => {
+                const badge = r.status === "paid"
+                  ? <span className="text-xs font-semibold rounded-full px-2.5 py-0.5 text-green-700 bg-green-100">✓ Paid</span>
+                  : r.status === "submitted"
+                  ? <span className="text-xs font-semibold rounded-full px-2.5 py-0.5 text-blue-700 bg-blue-100">↑ Submitted</span>
+                  : <span className="text-xs font-semibold rounded-full px-2.5 py-0.5 text-slate-600 bg-slate-100">Draft</span>
+                const busy = busyReportId === r.id
+                return (
+                  <div key={r.id} className={`border border-slate-200 rounded-xl p-4 bg-white ${r.archived ? "opacity-60" : ""}`}>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-semibold text-slate-800">{r.report_period}</span>
+                      {badge}
+                      {r.archived ? <span className="text-xs text-slate-400">archived</span> : null}
+                    </div>
+                    <div className="text-xs text-slate-500 mt-0.5">
+                      {fmt(r.total_amount)} · {r.transaction_count} txns · generated {fmtDate((r.date_generated || "").slice(0, 10))}
+                      {r.date_paid ? ` · paid ${fmtDate(r.date_paid.slice(0, 10))}` : r.date_submitted ? ` · submitted ${fmtDate(r.date_submitted.slice(0, 10))}` : ""}
+                    </div>
+                    <div className="flex flex-wrap gap-2 mt-3">
+                      {r.file_path && <button disabled={busy} onClick={() => openFile(r.file_path)} className="text-xs px-2.5 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 disabled:opacity-50">Open file</button>}
+                      <button disabled={busy} onClick={() => doReport(r.id, () => window.api.reports.regenerate(r.id).then((res: any) => { const p = unwrap<any>(res, null)?.filePath; if (p) openFile(p) }))}
+                        className="text-xs px-2.5 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 disabled:opacity-50">Regenerate</button>
+                      {r.status === "draft" && <button disabled={busy} onClick={() => doReport(r.id, () => window.api.reports.markSubmitted(r.id))}
+                        className="text-xs px-2.5 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">Mark submitted</button>}
+                      {r.status !== "paid" && <button disabled={busy} onClick={() => doReport(r.id, () => window.api.reports.markPaid(r.id))}
+                        className="text-xs px-2.5 py-1 rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-50">Mark paid</button>}
+                      <button disabled={busy} onClick={() => doReport(r.id, () => window.api.reports.setArchived(r.id, !r.archived))}
+                        className="text-xs px-2.5 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 disabled:opacity-50">{r.archived ? "Unarchive" : "Archive"}</button>
+                      <button disabled={busy} onClick={() => { if (confirm(`Delete "${r.report_period}"? Its transactions return to outstanding; the Excel file is left on disk.`)) doReport(r.id, () => window.api.reports.remove(r.id)) }}
+                        className="text-xs px-2.5 py-1 rounded bg-red-50 text-red-600 hover:bg-red-100 disabled:opacity-50">Delete</button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )
+        })()}
+      </div>
 
       {/* ── Blocker Resolution Modal ─────────────────────────────────────────── */}
       {showBlockerModal && (

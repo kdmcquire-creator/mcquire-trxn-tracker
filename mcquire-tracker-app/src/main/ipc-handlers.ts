@@ -9,6 +9,7 @@ import { reclassifyPendingAfterRuleChange, invalidateTripDateCache, learnFromCla
 import { saveClaudeApiKey, hasClaudeApiKey, deleteClaudeApiKey, suggestClassification, suggestBatch } from '../../electron/services/claude-classifier'
 import { configureOllama, isOllamaEnabled, getOllamaModel, testOllamaConnection, classifyWithOllama, loadHistoricalDecisions, analyzeDuplicateBatch } from '../../electron/services/ollama.service'
 import { P10_CATEGORIES, LLC_CATEGORIES } from '../shared/types'
+import { peak10Outstanding } from '../../electron/services/expense-report-manager'
 
 interface AppState {
   db: () => CompatDb | null
@@ -96,8 +97,16 @@ export function registerAppIpcHandlers(state: AppState): void {
          GROUP BY t.bucket`
       )
       .all() as Array<{ bucket: string; total: number; count: number }>
-    const result: Record<string, { total: number; count: number }> = {}
+    const result: Record<string, { total: number; count: number; outstanding?: number; reimbursed?: number }> = {}
     for (const r of rows) result[r.bucket] = { total: r.total, count: r.count }
+
+    // Peak 10 "outstanding" = reimbursable expenses not yet on a submitted/paid report
+    // (see peak10Outstanding — mirrors the expense-report query, cutoff-aware).
+    if (result['Peak 10']) {
+      const p = peak10Outstanding(db)
+      result['Peak 10'].outstanding = p.outstanding
+      result['Peak 10'].reimbursed = p.reimbursed
+    }
     return { success: true, data: result }
   })
 
