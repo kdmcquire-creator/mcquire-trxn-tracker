@@ -393,7 +393,14 @@ export class HistoricalImportService {
   }
 
   private accountByMask(mask: string): { id: string } | null {
-    const a = this.db.prepare("SELECT id FROM accounts WHERE account_mask = ? AND is_active = 1 LIMIT 1").get(mask) as { id: string } | undefined
+    // Prefer an active account with this mask, but fall back to a dormant one.
+    // USAA checking …8178 has no Plaid feed and was left is_active=0 when the other
+    // accounts moved to Plaid, so a statement for it must still resolve here (import
+    // re-activates it). ORDER BY is_active DESC keeps an active twin winning for masks
+    // that have both a dormant watched-folder record and an active Plaid one.
+    const a = this.db.prepare(
+      "SELECT id FROM accounts WHERE account_mask = ? ORDER BY is_active DESC LIMIT 1"
+    ).get(mask) as { id: string } | undefined
     return a ? { id: a.id } : null
   }
 
@@ -436,7 +443,11 @@ export class HistoricalImportService {
     if (!stmt.accountMask) throw new Error('Could not read the account number from the statement.')
 
     let acctId = this.accountByMask(stmt.accountMask)?.id
-    if (!acctId) {
+    if (acctId) {
+      // Re-activate a dormant account (e.g. USAA checking …8178) so its statements
+      // import into the existing record instead of spawning a duplicate account.
+      this.db.prepare("UPDATE accounts SET is_active = 1 WHERE id = ? AND is_active = 0").run(acctId)
+    } else {
       acctId = uuidv4()
       this.db.prepare(
         `INSERT OR IGNORE INTO accounts (id, institution, account_name, account_mask, account_type, entity,
